@@ -1,0 +1,40 @@
+# Compiled binaries
+bin/
+*.exe
+*.test
+*.prof
+
+# Local node data
+nosox-data/
+NOSODATA/
+testdata-local/
+migration-test/
+
+# Local wallets (NEVER commit)
+*.json.tmp
+wallet.json
+wallet.pkw
+
+# Release artifacts
+release/
+dist/
+
+# Go workspace junk
+vendor/
+
+# OS noise
+.DS_Store
+*.swp
+*.bak
+*.old
+*.log
+
+# Editor metadata
+.idea/
+.vscode/
+
+# Test fuzz corpus (regenerated; not source)
+testdata/fuzz/
+
+# Live preview servers
+/tmp/nosox-launch/
