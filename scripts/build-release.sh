@@ -4,7 +4,6 @@
 # Produces:
 #   release/<version>/nosoxd-<os>-<arch>
 #   release/<version>/nosox-cli-<os>-<arch>
-#   release/<version>/nosox-explorer-<os>-<arch>
 #   release/<version>/nosocli-<os>-<arch>
 #   release/<version>/nosod-<os>-<arch>
 #   release/<version>/SHA256SUMS
@@ -41,7 +40,7 @@ ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
 OUT="$ROOT/release/$VERSION"
 mkdir -p "$OUT"
 
-BINS=(nosoxd nosox-cli nosox-explorer nosocli nosod)
+BINS=(nosoxd nosox-cli nosocli nosod)
 
 for plat in "${PLATFORMS[@]}"; do
   os="${plat%/*}"

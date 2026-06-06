@@ -43,14 +43,15 @@ git clone https://github.com/Noso-Project/noso-go
 cd noso-go
 go build -o bin/nosoxd ./cmd/nosoxd
 go build -o bin/nosox-cli ./cmd/nosox-cli
-go build -o bin/nosox-explorer ./cmd/nosox-explorer
 ```
 
-Three binaries:
+Two binaries:
 
 * `nosoxd` — full node + miner + RPC + libp2p host
 * `nosox-cli` — wallet + client tools
-* `nosox-explorer` — HTMX-based block explorer
+
+The block explorer is a separate static repo (`nosox-explorer`, GitHub Pages) —
+see Step 7.
 
 ## Step 3 — bootstrap a fresh chain
 
@@ -164,14 +165,13 @@ For NAT'd nodes, also pass `-relay` with a list of public relay
 multi-addrs. The libp2p AutoRelay subsystem will register and accept
 inbound dials via the relay.
 
-## Step 7 — run the explorer (optional)
+## Step 7 — the explorer (separate, serverless)
 
-```bash
-bin/nosox-explorer -listen :7782 -node http://127.0.0.1:7780
-```
-
-Browse `http://localhost:7782/` — pages: tip, /block?h=N, /legacy?a=N…,
-/genesis. Uses SIGMA identity, IBM Plex, HTMX. Works on any browser.
+The block explorer is now its own **static** repo (`nosox-explorer`),
+deployed to GitHub Pages at `explorer.pasichdev.xyz`. It talks to node RPC
+directly from the browser — there is nothing to run here. Just make sure your
+node's RPC is reachable over HTTPS with CORS (it is by default) and listed in
+`seeds/rpc-mainnet.txt` (served at `https://pasichdev.xyz/seeds/rpc-mainnet.txt`).
 
 ## Step 8 — expose the RPC externally (remote wallets / explorers)
 
