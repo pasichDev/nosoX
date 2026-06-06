@@ -1,7 +1,7 @@
 # Noso v2 — mainnet seed nodes
 #
 # This file is the source of truth for the public seed list. It is served at
-#   https://pasichdev.xyz/seeds/mainnet.txt   (CNAME -> GitHub Pages / host)
+#   https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/mainnet.txt   (CNAME -> GitHub Pages / host)
 # and fetched by nodes at startup (see v2/p2p/httpseeds.go). Edit here, deploy,
 # and every new node picks up the change without a binary upgrade.
 #

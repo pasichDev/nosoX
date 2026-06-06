@@ -1,6 +1,6 @@
 # Noso v2 — testnet seed nodes
 #
-# Served at https://pasichdev.xyz/seeds/testnet.txt and fetched by nodes
+# Served at https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/testnet.txt and fetched by nodes
 # started with -network testnet. Same format as mainnet.txt: one libp2p
 # multi-address per line, '#' comments and blank lines ignored.
 #

@@ -106,16 +106,16 @@ set changes. Instead, keep the live list in the repo at
 domain**:
 
 ```
-https://pasichdev.xyz/seeds/mainnet.txt
+https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/mainnet.txt
 ```
 
-Point `pasichdev.xyz` (CNAME) at a static host (GitHub Pages / Cloudflare
-Pages) that serves the repo's `seeds/` directory. Every node fetches this URL
+The file is served straight from the repo via GitHub raw (no custom
+domain, no deploy step). Every node fetches this URL
 on startup (`v2/p2p/httpseeds.go` → `HTTPSeedURLs`) and merges it with `-seed`,
 DNS seeds and the DHT. Rotate seeds by editing the file and redeploying — no
 new binary. Per-node opt-out: `-http-seeds=false`. Format: one libp2p
 multi-address per line; `#` comments and blank lines ignored. Testnet uses
-`seeds/testnet.txt` → `https://pasichdev.xyz/seeds/testnet.txt`.
+`seeds/testnet.txt` → `https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/testnet.txt`.
 
 ## Step 5 — start mining
 
@@ -168,10 +168,10 @@ inbound dials via the relay.
 ## Step 7 — the explorer (separate, serverless)
 
 The block explorer is now its own **static** repo (`nosox-explorer`),
-deployed to GitHub Pages at `explorer.pasichdev.xyz`. It talks to node RPC
+deployed to GitHub Pages at `https://pasichDev.github.io/nosox-explorer/`. It talks to node RPC
 directly from the browser — there is nothing to run here. Just make sure your
 node's RPC is reachable over HTTPS with CORS (it is by default) and listed in
-`seeds/rpc-mainnet.txt` (served at `https://pasichdev.xyz/seeds/rpc-mainnet.txt`).
+`seeds/rpc-mainnet.txt` (served at `https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/rpc-mainnet.txt`).
 
 ## Step 8 — expose the RPC externally (remote wallets / explorers)
 

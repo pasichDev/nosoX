@@ -1,5 +1,5 @@
 # NosoX — public node RPC endpoints (HTTPS) for the static explorer.
-# Served at https://pasichdev.xyz/seeds/rpc-mainnet.txt. One URL per line;
+# Served at https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/rpc-mainnet.txt. One URL per line;
 # '#' comments and blank lines ignored. Use HTTPS (TLS-terminated reverse
 # proxy in front of nosoxd :7780). Read-only methods are public (no token).
 #
