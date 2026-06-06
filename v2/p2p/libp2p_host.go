@@ -79,7 +79,15 @@ func NewLibp2p(listenAddrs []string, magic uint32, c *chain.Chain, p *mempool.Po
 	if len(listenAddrs) > 0 {
 		opts = append(opts, libp2p.ListenAddrStrings(listenAddrs...))
 	} else {
-		opts = append(opts, libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/7781"))
+		// Listen on both TCP and QUIC-v1 (UDP). QUIC — the transport
+		// Google (HTTP/3) and other latency-sensitive apps use — recovers
+		// from packet loss per-stream and survives NAT rebinds, so it stays
+		// usable on poor/mobile networks where TCP stalls. DefaultTransports
+		// already registers the QUIC dialer; we just need to listen on it.
+		opts = append(opts, libp2p.ListenAddrStrings(
+			"/ip4/0.0.0.0/tcp/7781",
+			"/ip4/0.0.0.0/udp/7781/quic-v1",
+		))
 	}
 	h, err := libp2p.New(opts...)
 	if err != nil {

@@ -1,0 +1,94 @@
+name: release
+
+# Builds reproducible binaries for the node, CLI/wallet, miner (the node
+# with -mine) and explorer on every pushed semver tag, then attaches them
+# to a GitHub Release. Reproducible flags (-trimpath, -buildvcs=false,
+# stripped buildid) make two independent rebuilds byte-identical — see
+# docs/v2/REPRODUCIBLE.md.
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }   # Raspberry Pi 4/5, ARM servers
+          - { goos: linux,   goarch: arm   }   # 32-bit Pi / SBCs
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    env:
+      CGO_ENABLED: '0'
+      GOFLAGS: '-buildvcs=false'
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Build binaries (node, cli/wallet, explorer)
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          OUT="dist/noso-go_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "$OUT"
+          EXT=""; [ "$GOOS" = "windows" ] && EXT=".exe"
+          LDFLAGS="-s -w -buildid="
+          # nosoxd = full node + miner (run with -mine)
+          go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/nosoxd$EXT"        ./cmd/nosoxd
+          # nosox-cli = wallet + claim/slatepack/GVT tooling
+          go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/nosox-cli$EXT"     ./cmd/nosox-cli
+          # nosox-explorer = HTMX block explorer
+          go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/nosox-explorer$EXT" ./cmd/nosox-explorer
+          cp README.md docs/v2/LAUNCH.md "$OUT/" 2>/dev/null || true
+
+      - name: Package + checksums
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          NAME="noso-go_${VERSION}_${GOOS}_${GOARCH}"
+          cd dist
+          if [ "$GOOS" = "windows" ]; then
+            zip -r "${NAME}.zip" "$NAME"; sha256sum "${NAME}.zip" > "${NAME}.zip.sha256"
+          else
+            tar -czf "${NAME}.tar.gz" "$NAME"; sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noso-go-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          generate_release_notes: true

@@ -11,7 +11,13 @@ and anyone forking the chain.
 * The v1 `sumary.psk` file if you want to carry forward legacy
   balances (the canonical Noso v2 mainnet does; private forks do not
   have to)
-* Outbound TCP allowed on the chosen p2p port
+* Inbound + outbound **TCP and UDP** allowed on the chosen p2p port —
+  the node listens on both TCP and **QUIC-v1 (UDP)**. QUIC (the
+  transport Google/HTTP3 use) keeps peers connected on lossy/mobile
+  networks where TCP stalls; no extra flags, just open UDP too.
+
+> **Launch plan: 3 seed nodes** are enough to bootstrap the mesh; the
+> DHT + HTTPS/DNS seed discovery take over from there.
 
 ## Step 1 — pick network parameters
 
@@ -91,6 +97,25 @@ Tag a release commit with the official seed list so every new
 node bootstraps without manual configuration. Operators behind
 NAT add their entries to `MainnetRelays` instead and run a relay node.
 
+### Recommended: publish seeds over HTTPS at your domain (no rebuild)
+
+Hard-coding seeds in `bootstrap.go` means a binary upgrade every time the
+set changes. Instead, keep the live list in the repo at
+[`seeds/mainnet.txt`](../../seeds/mainnet.txt) and **serve it from your
+domain**:
+
+```
+https://pasichdev.xyz/seeds/mainnet.txt
+```
+
+Point `pasichdev.xyz` (CNAME) at a static host (GitHub Pages / Cloudflare
+Pages) that serves the repo's `seeds/` directory. Every node fetches this URL
+on startup (`v2/p2p/httpseeds.go` → `HTTPSeedURLs`) and merges it with `-seed`,
+DNS seeds and the DHT. Rotate seeds by editing the file and redeploying — no
+new binary. Per-node opt-out: `-http-seeds=false`. Format: one libp2p
+multi-address per line; `#` comments and blank lines ignored. Testnet uses
+`seeds/testnet.txt` → `https://pasichdev.xyz/seeds/testnet.txt`.
+
 ## Step 5 — start mining
 
 A miner needs:
@@ -147,6 +172,36 @@ bin/nosox-explorer -listen :7782 -node http://127.0.0.1:7780
 
 Browse `http://localhost:7782/` — pages: tip, /block?h=N, /legacy?a=N…,
 /genesis. Uses SIGMA identity, IBM Plex, HTMX. Works on any browser.
+
+## Step 8 — expose the RPC externally (remote wallets / explorers)
+
+To let wallets, explorers and clients connect **from outside** over JSON-RPC:
+
+```bash
+bin/nosoxd -data /var/nosox -network mainnet \
+    -rpc 0.0.0.0:7780 \
+    -rpc-token "$(openssl rand -hex 32)"   # REQUIRED on a public bind
+```
+
+- **Bind:** `-rpc 0.0.0.0:7780` listens on all interfaces; open TCP 7780 in the
+  firewall. (Loopback-only? use `127.0.0.1:7780`.)
+- **Auth:** on a non-loopback bind always set `-rpc-token`. Read-only methods
+  (`tip`, `getblock`, `legacybalance`, `genesisinfo`, `minerstats`, …) stay
+  public so an explorer needs no token; mutating methods (`startmining`,
+  `stopmining`, …) require `Authorization: Bearer <token>`.
+- **Browser clients:** CORS is enabled (`Access-Control-Allow-Origin: *`,
+  `Allow-Headers: Content-Type, Authorization`), so a web wallet on another
+  origin can call a remote node with a Bearer token — the preflight passes.
+- **TLS:** the RPC server is plain HTTP. For public deployments terminate TLS
+  at a reverse proxy (Caddy/nginx) — e.g. `https://rpc.pasichdev.xyz` → 7780 —
+  so tokens aren't sent in clear.
+
+Quick remote check:
+
+```bash
+curl -s https://rpc.pasichdev.xyz -X POST -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"tip","id":1}'
+```
 
 ## Verification checklist
 

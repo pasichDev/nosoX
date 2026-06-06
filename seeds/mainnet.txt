@@ -1,0 +1,18 @@
+# Noso v2 — mainnet seed nodes
+#
+# This file is the source of truth for the public seed list. It is served at
+#   https://pasichdev.xyz/seeds/mainnet.txt   (CNAME -> GitHub Pages / host)
+# and fetched by nodes at startup (see v2/p2p/httpseeds.go). Edit here, deploy,
+# and every new node picks up the change without a binary upgrade.
+#
+# Format: one libp2p multi-address per line. Blank lines and lines starting
+# with '#' are ignored. Each address MUST end with /p2p/<PeerID>.
+#
+# Launch plan: 3 seed nodes are enough to bootstrap. Fill these in after the
+# first three operators publish their /dns4/ (preferred) or /ip4/ addresses
+# and PeerIDs (printed by nosoxd on first start).
+#
+# Example (replace with real values):
+# /dns4/seed1.pasichdev.xyz/tcp/7781/p2p/12D3KooWExampleSeedOnePeerIDxxxxxxxxxxxxxxxxxxx
+# /dns4/seed2.pasichdev.xyz/tcp/7781/p2p/12D3KooWExampleSeedTwoPeerIDxxxxxxxxxxxxxxxxxxx
+# /dns4/seed3.pasichdev.xyz/tcp/7781/p2p/12D3KooWExampleSeedThreePeerIDxxxxxxxxxxxxxxxxx
