@@ -85,7 +85,7 @@ NosoX restores forward motion **without throwing away its users**:
 | Halving | every 210 000 blocks (≈292 days) | Matches v1 emission |
 | Halving steps | 10 | Tail emission ends after ≈10 years |
 | Initial reward | 50 NOSO | v1 continuity |
-| Max supply | ~24 M NOSO | ~3 M legacy + ~21 M emission |
+| Max supply | ~30 M NOSO | ~9 M legacy + ~21 M emission |
 | Premine | **0** | No founder allocation, no insider supply |
 | Dev fund | **0** | No tax on miners or holders |
 | Treasury | **0** | No multisig sitting on community funds |

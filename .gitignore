@@ -38,3 +38,7 @@ testdata/fuzz/
 
 # Live preview servers
 /tmp/nosox-launch/
+
+# dev fund private key — never commit
+dev-wallet/
+*.seed
