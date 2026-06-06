@@ -192,9 +192,11 @@ bin/nosoxd -data /var/nosox -network mainnet \
 - **Browser clients:** CORS is enabled (`Access-Control-Allow-Origin: *`,
   `Allow-Headers: Content-Type, Authorization`), so a web wallet on another
   origin can call a remote node with a Bearer token — the preflight passes.
-- **TLS:** the RPC server is plain HTTP. For public deployments terminate TLS
-  at a reverse proxy (Caddy/nginx) — e.g. `https://rpc.pasichdev.xyz` → 7780 —
-  so tokens aren't sent in clear.
+- **TLS (in-node):** the node can serve RPC over HTTPS itself —
+  `-rpc-tls-cert cert.pem -rpc-tls-key key.pem`. Use this so an HTTPS browser app
+  (the GitHub-Pages explorer) can connect directly without the mixed-content
+  block; no reverse proxy required. (A reverse proxy like Caddy/nginx still works
+  if you prefer.)
 
 Quick remote check:
 
