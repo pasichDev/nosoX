@@ -43,7 +43,7 @@ NosoSova Flutter wallet — intact.
   produce blocks at a meaningful rate at network launch.
 - **Forkable.** Anyone holding the v1 `sumary.psk` can deterministically
   generate the genesis block; anyone running the source can fork.
-- **No premine, no team allocation, no dev fund.** The legacy carry-over
+- **No premine, no team allocation.** Development is funded transparently by network transaction fees paid to a single public, immutable dev address (see DEVFUND.md). The legacy carry-over
   is the only pre-genesis state.
 
 ## 3. Notation

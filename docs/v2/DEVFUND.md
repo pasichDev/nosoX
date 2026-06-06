@@ -34,8 +34,9 @@ Done in `v2/chain/devfund.go` + miner + consensus, with tests
    fee-requires-output, correct accepted, wrong-value rejected, duplicate
    rejected.
 
-REMAINING (gated behind external audit, same bar as Bulletproofs):
-- Full MW sum-balance enforcement (Σ outputs − Σ inputs = Σ excess + fee·H) is
-  a separate, pre-existing gap in this codebase — the dev-fee rule is consistent
-  with the current value-known coinbase model but does not by itself close it.
+DONE alongside this: full MW no-inflation balance check
+(`v2/chain/balance.go`, `validateBalance`): Σ plain_out − Σ in + fee·H == Σ
+tx_kernel_excess, with coinbase/dev value-known outputs excluded (verified
+separately) and genesis skipped. Tested for valid spend, inflation rejection,
+coinbase-only, and genesis. Still audit-gated like Bulletproofs.
 - The dev spends the output with the off-repo scalar r_dev (P_dev = r_dev·G).

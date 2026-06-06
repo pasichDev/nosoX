@@ -346,6 +346,10 @@ func (c *Chain) validate(b *types.Block) error {
 	if err := validateDevFund(b); err != nil {
 		return err
 	}
+	// Core MW no-inflation invariant: Σ plain_out − Σ in + fee·H == Σ excess.
+	if err := c.validateBalance(b); err != nil {
+		return err
+	}
 	return nil
 }
 
