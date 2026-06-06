@@ -341,6 +341,11 @@ func (c *Chain) validate(b *types.Block) error {
 			return fmt.Errorf("chain: output %d has invalid range proof", i)
 		}
 	}
+	// Transparent dev fee: per-block network fees must be paid to the public
+	// dev-fund address (see docs/v2/DEVFUND.md).
+	if err := validateDevFund(b); err != nil {
+		return err
+	}
 	return nil
 }
 

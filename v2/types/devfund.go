@@ -1,39 +1,43 @@
 package types
 
-import (
-	"crypto/ed25519"
-	"encoding/hex"
-)
+import "encoding/hex"
 
 // Transparent dev fund.
 //
-// NosoX has NO premine and NO hidden allocation. Development is funded only by
-// an OPEN, on-chain message fee (see the messenger protocol): every paid
-// message routes its fixed fee to the single dev address below. The address is
-// a hard-coded, immutable protocol constant so the fee destination cannot be
-// silently redirected — and it is fully public so anyone can audit every coin
-// that ever reaches it on-chain.
+// NosoX has NO premine and NO hidden allocation. Development is funded openly by
+// NETWORK TRANSACTION FEES: the per-block total of kernel fees is paid to the
+// single dev address below as a dedicated coinbase-class output, while the
+// miner keeps the block subsidy.
 //
-// The matching private key is the project's; it is NOT in this repository.
-// There is nothing secret about the *address* — only the spending key is held
-// off-repo. This is the opposite of a hidden dev wallet: it is a published,
-// verifiable recipient.
+// The dev address is a secp256k1 point P_dev = r_dev·G (the same curve the
+// Pedersen commitments use). A block's dev-fund output for fee total F is the
+// value-known commitment
+//
+//	C = F·H + P_dev
+//
+// which ANY validator can recompute and check from public data (F is the sum of
+// public kernel fees, P_dev is this constant) — so the fee destination is
+// immutable and fully auditable. Only the holder of the off-repo scalar r_dev
+// can spend it. This is the opposite of a hidden dev wallet.
 const (
-	// DevFundPubKeyHex is the Ed25519 public key (32 bytes, hex) that receives
-	// transparent message fees. Genesis allocation to it is ZERO.
-	DevFundPubKeyHex = "099f0f0f049e8368209a50d6d0eddd336fee0faa89692da156b50fdcc9470a97"
+	// DevFundPointHex is the 33-byte compressed secp256k1 point (hex) that
+	// receives transparent per-block network fees. Spending scalar is held
+	// off-repo (repo/noso/dev-wallet, gitignored).
+	DevFundPointHex = "0364b94012c0a3484b9f0ed69088263fa47fb5258ec1ddb9186ebf0238b501323d"
 
 	// DevFundGenesisAllocation is the coins minted to the dev fund at block 0.
-	// ZERO by design — the dev fund is fee-funded only, never premined.
+	// ZERO by design — fee-funded only, never premined.
 	DevFundGenesisAllocation int64 = 0
 )
 
-// DevFundPubKey returns the dev-fund recipient public key. Panics at startup if
-// the constant is malformed (a build-time invariant, caught by tests).
-func DevFundPubKey() ed25519.PublicKey {
-	b, err := hex.DecodeString(DevFundPubKeyHex)
-	if err != nil || len(b) != ed25519.PublicKeySize {
-		panic("types: invalid DevFundPubKeyHex")
+// DevFundPoint returns the dev-fund recipient point as a Commitment-sized array.
+// Panics at startup if the constant is malformed (build-time invariant).
+func DevFundPoint() Commitment {
+	b, err := hex.DecodeString(DevFundPointHex)
+	if err != nil || len(b) != 33 {
+		panic("types: invalid DevFundPointHex")
 	}
-	return ed25519.PublicKey(b)
+	var c Commitment
+	copy(c[:], b)
+	return c
 }

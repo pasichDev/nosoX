@@ -1,14 +1,11 @@
 package types
 
-import (
-	"crypto/ed25519"
-	"testing"
-)
+import "testing"
 
-func TestDevFundPubKeyValid(t *testing.T) {
-	pk := DevFundPubKey() // panics if malformed
-	if len(pk) != ed25519.PublicKeySize {
-		t.Fatalf("dev fund pubkey size = %d, want %d", len(pk), ed25519.PublicKeySize)
+func TestDevFundPointValid(t *testing.T) {
+	p := DevFundPoint() // panics if malformed
+	if p[0] != 0x02 && p[0] != 0x03 {
+		t.Fatalf("dev fund point not a compressed secp256k1 point (prefix 0x%02x)", p[0])
 	}
 }
 

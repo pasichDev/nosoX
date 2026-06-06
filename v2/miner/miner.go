@@ -235,6 +235,23 @@ func (m *Miner) makeCandidate() (*candidate, error) {
 		})
 	}
 
+	// Transparent dev fee: route the block's total network fees to the public
+	// dev-fund output (value-known F·H + DevFundPoint). Consensus enforces this
+	// in chain.validateDevFund; the coinbase kernel carries Fee 0, so summing
+	// all kernels yields exactly the network-fee total.
+	var totalFee uint64
+	for i := range kernels {
+		totalFee += kernels[i].Fee
+	}
+	if totalFee > 0 {
+		if dc, err := chain.ExpectedDevFundCommit(totalFee); err == nil {
+			outputs = append(outputs, types.Output{
+				Features: types.OutputFeaturesDevFund,
+				Commit:   dc,
+			})
+		}
+	}
+
 	hdr := types.BlockHeader{
 		Version:    types.BlockVersion,
 		Height:     height,
