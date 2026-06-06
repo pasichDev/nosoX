@@ -43,7 +43,7 @@ NosoSova Flutter wallet — intact.
   produce blocks at a meaningful rate at network launch.
 - **Forkable.** Anyone holding the v1 `sumary.psk` can deterministically
   generate the genesis block; anyone running the source can fork.
-- **No premine, no team allocation, no dev fund.** The legacy carry-over
+- **No premine, no team allocation.** Development is funded transparently by network transaction fees paid to a single public, immutable dev address (see DEVFUND.md). The legacy carry-over
   is the only pre-genesis state.
 
 ## 3. Notation
@@ -347,7 +347,7 @@ genesis hash 3a59a5392e8e7f9ee8ad1a02c9db684a56808c786a36e519dcab5b0ab4f22f07
 | Halving interval | 210 000 blocks (≈ 292 days) |
 | Halving steps | 10 |
 | Initial reward | 50 NOSO (5×10⁹ base units) |
-| Total supply | ≈ 24 M NOSO (≈ 3 M legacy + ≈ 20.98 M emission) |
+| Total supply | ≈ 30 M NOSO (≈ 9 M legacy + ≈ 20.98 M emission) |
 | Premine | 0 |
 | Dev fund | 0 |
 | Min fee | `max(amount / 10 000, 1 000 000)` base units |

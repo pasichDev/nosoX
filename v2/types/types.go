@@ -95,6 +95,11 @@ const (
 	// Spend requires the original v1 owner's secp256k1 signature, same
 	// as legacy balance UTXOs.
 	OutputFeaturesLegacyGVT OutputFeatures = 3
+	// OutputFeaturesDevFund marks the per-block transparent dev-fund output:
+	// a value-known commitment F·H + DevFundPoint where F is the block's total
+	// kernel fee. At most one per block; only present when F > 0. See
+	// devfund.go and docs/v2/DEVFUND.md.
+	OutputFeaturesDevFund OutputFeatures = 4
 )
 
 // GVTBaseValue is the NOSO-equivalent value of one inherited v1 GVT

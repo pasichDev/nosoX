@@ -39,7 +39,7 @@ jobs:
           go-version: '1.25.x'
           cache: true
 
-      - name: Build binaries (node, cli/wallet, explorer)
+      - name: Build binaries (node, cli/wallet)
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME:-dev}"
@@ -51,8 +51,6 @@ jobs:
           go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/nosoxd$EXT"        ./cmd/nosoxd
           # nosox-cli = wallet + claim/slatepack/GVT tooling
           go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/nosox-cli$EXT"     ./cmd/nosox-cli
-          # nosox-explorer = HTMX block explorer
-          go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/nosox-explorer$EXT" ./cmd/nosox-explorer
           cp README.md docs/v2/LAUNCH.md "$OUT/" 2>/dev/null || true
 
       - name: Package + checksums

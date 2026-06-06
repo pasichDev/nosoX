@@ -43,14 +43,15 @@ git clone https://github.com/Noso-Project/noso-go
 cd noso-go
 go build -o bin/nosoxd ./cmd/nosoxd
 go build -o bin/nosox-cli ./cmd/nosox-cli
-go build -o bin/nosox-explorer ./cmd/nosox-explorer
 ```
 
-Three binaries:
+Two binaries:
 
 * `nosoxd` — full node + miner + RPC + libp2p host
 * `nosox-cli` — wallet + client tools
-* `nosox-explorer` — HTMX-based block explorer
+
+The block explorer is a separate static repo (`nosox-explorer`, GitHub Pages) —
+see Step 7.
 
 ## Step 3 — bootstrap a fresh chain
 
@@ -105,16 +106,16 @@ set changes. Instead, keep the live list in the repo at
 domain**:
 
 ```
-https://pasichdev.xyz/seeds/mainnet.txt
+https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/mainnet.txt
 ```
 
-Point `pasichdev.xyz` (CNAME) at a static host (GitHub Pages / Cloudflare
-Pages) that serves the repo's `seeds/` directory. Every node fetches this URL
+The file is served straight from the repo via GitHub raw (no custom
+domain, no deploy step). Every node fetches this URL
 on startup (`v2/p2p/httpseeds.go` → `HTTPSeedURLs`) and merges it with `-seed`,
 DNS seeds and the DHT. Rotate seeds by editing the file and redeploying — no
 new binary. Per-node opt-out: `-http-seeds=false`. Format: one libp2p
 multi-address per line; `#` comments and blank lines ignored. Testnet uses
-`seeds/testnet.txt` → `https://pasichdev.xyz/seeds/testnet.txt`.
+`seeds/testnet.txt` → `https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/testnet.txt`.
 
 ## Step 5 — start mining
 
@@ -164,14 +165,13 @@ For NAT'd nodes, also pass `-relay` with a list of public relay
 multi-addrs. The libp2p AutoRelay subsystem will register and accept
 inbound dials via the relay.
 
-## Step 7 — run the explorer (optional)
+## Step 7 — the explorer (separate, serverless)
 
-```bash
-bin/nosox-explorer -listen :7782 -node http://127.0.0.1:7780
-```
-
-Browse `http://localhost:7782/` — pages: tip, /block?h=N, /legacy?a=N…,
-/genesis. Uses SIGMA identity, IBM Plex, HTMX. Works on any browser.
+The block explorer is now its own **static** repo (`nosox-explorer`),
+deployed to GitHub Pages at `https://pasichDev.github.io/nosox-explorer/`. It talks to node RPC
+directly from the browser — there is nothing to run here. Just make sure your
+node's RPC is reachable over HTTPS with CORS (it is by default) and listed in
+`seeds/rpc-mainnet.txt` (served at `https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/rpc-mainnet.txt`).
 
 ## Step 8 — expose the RPC externally (remote wallets / explorers)
 
@@ -192,9 +192,11 @@ bin/nosoxd -data /var/nosox -network mainnet \
 - **Browser clients:** CORS is enabled (`Access-Control-Allow-Origin: *`,
   `Allow-Headers: Content-Type, Authorization`), so a web wallet on another
   origin can call a remote node with a Bearer token — the preflight passes.
-- **TLS:** the RPC server is plain HTTP. For public deployments terminate TLS
-  at a reverse proxy (Caddy/nginx) — e.g. `https://rpc.pasichdev.xyz` → 7780 —
-  so tokens aren't sent in clear.
+- **TLS (in-node):** the node can serve RPC over HTTPS itself —
+  `-rpc-tls-cert cert.pem -rpc-tls-key key.pem`. Use this so an HTTPS browser app
+  (the GitHub-Pages explorer) can connect directly without the mixed-content
+  block; no reverse proxy required. (A reverse proxy like Caddy/nginx still works
+  if you prefer.)
 
 Quick remote check:
 

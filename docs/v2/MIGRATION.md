@@ -132,7 +132,7 @@ files produce the same `Block.HeaderID`. The integration test
 `testdata/sumary_59238.psk` + `testdata/gvts.psk` fixtures:
 
 ```
-3561 accounts (2,971,803 NOSO) + 100 GVTs (7,000 NOSO)
+16,207 accounts (9,011,854 NOSO at block 180031) + 100 GVTs (7,000 NOSO)
    → genesis hash 3e7c5bcae0765b0f6e7b203d9c4261cde84e30ec8f3014ab2f7f1b4bf7ffe3ed
 ```
 

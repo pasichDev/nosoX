@@ -53,6 +53,8 @@ func main() {
 		mineThreads     = flag.Int("threads", 1, "mining threads")
 		mineReward      = flag.String("reward", "nosox-default", "reward identifier for coinbase output")
 		rpcToken        = flag.String("rpc-token", "", "Bearer token for mutating RPC methods; empty = no auth (only safe on 127.0.0.1)")
+		rpcTLSCert      = flag.String("rpc-tls-cert", "", "TLS cert file: serve RPC over HTTPS directly from the node (so HTTPS browser apps can connect, no reverse proxy)")
+		rpcTLSKey       = flag.String("rpc-tls-key", "", "TLS key file (required with -rpc-tls-cert)")
 	)
 	flag.Parse()
 
@@ -156,12 +158,26 @@ func main() {
 			"methods are unprotected. Pass -rpc-token or bind 127.0.0.1.", *rpcAddr)
 	}
 	httpSrv := &http.Server{Addr: *rpcAddr, Handler: rpcSvc.HTTPHandler()}
+	rpcTLS := *rpcTLSCert != "" && *rpcTLSKey != ""
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if rpcTLS {
+			// In-node HTTPS: lets browser apps served over HTTPS (e.g. the
+			// GitHub-Pages explorer) talk to the node directly without hitting
+			// the mixed-content block — no separate reverse proxy needed.
+			err = httpSrv.ListenAndServeTLS(*rpcTLSCert, *rpcTLSKey)
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			logger.Printf("rpc: %v", err)
 		}
 	}()
-	logger.Printf("JSON-RPC on http://%s", *rpcAddr)
+	scheme := "http"
+	if rpcTLS {
+		scheme = "https"
+	}
+	logger.Printf("JSON-RPC on %s://%s", scheme, *rpcAddr)
 
 	if *doMine {
 		if err := mn.Start(ctx, *mineThreads, *mineReward); err != nil {

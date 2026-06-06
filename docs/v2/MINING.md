@@ -4,8 +4,8 @@ NosoX = Argon2id with memory=64 MiB, time=1, threads=1. Memory-hard,
 ARM-friendly, ASIC-hostile.
 
 Per locked spec: block time 120 s, halving every 210,000 blocks
-(~292 days), 10 halvings, initial reward 50 NOSO, max supply ≈24 M NOSO
-(≈3 M legacy + ≈20.98 M emission). No premine. No dev fund.
+(~292 days), 10 halvings, initial reward 50 NOSO, max supply ≈30 M NOSO
+(≈9 M legacy + ≈20.98 M emission). No premine.
 
 ## Hardware targets
 

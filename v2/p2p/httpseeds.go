@@ -19,8 +19,8 @@ import (
 // rotate the seed set without shipping a new binary; nodes re-fetch on every
 // start. Keep the file small and behind a CDN/static host.
 var HTTPSeedURLs = map[string][]string{
-	"mainnet": {"https://pasichdev.xyz/seeds/mainnet.txt"},
-	"testnet": {"https://pasichdev.xyz/seeds/testnet.txt"},
+	"mainnet": {"https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/mainnet.txt"},
+	"testnet": {"https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/testnet.txt"},
 }
 
 // ParseSeedList reads a seed file (one multi-address per line; '#' comments
