@@ -45,6 +45,7 @@ func main() {
 		p2pAddr         = flag.String("p2p", ":7781", "P2P listen address")
 		seedAddr        = flag.String("seed", "", "comma-separated libp2p multi-addrs of seed peers")
 		relayAddr       = flag.String("relay", "", "comma-separated libp2p multi-addrs of relay nodes (for NAT)")
+		httpSeeds       = flag.Bool("http-seeds", true, "fetch the published seed list over HTTPS at startup (see v2/p2p/httpseeds.go)")
 		genesisSummary  = flag.String("genesis-summary", "", "path to v1 sumary.psk to airdrop into genesis (only used on first start)")
 		genesisGVTs     = flag.String("genesis-gvts", "", "path to v1 gvts.psk to carry forward 100 GVT tokens (only used on first start)")
 		networkName     = flag.String("network", "mainnet", "mainnet | testnet")
@@ -95,7 +96,13 @@ func main() {
 	// Network broadcast wiring: every mined block fans out via libp2p.
 	// We register the listener after the p2p node is created (below).
 
-	node, err := p2p.NewLibp2p([]string{"/ip4/0.0.0.0/tcp" + p2pAddrToPort(*p2pAddr)}, magic, c, mp)
+	// Listen on TCP and QUIC-v1 (UDP) on the same port. QUIC keeps the node
+	// reachable on lossy/mobile networks where TCP connections stall.
+	p2pPort := p2pAddrToPort(*p2pAddr)
+	node, err := p2p.NewLibp2p([]string{
+		"/ip4/0.0.0.0/tcp" + p2pPort,
+		"/ip4/0.0.0.0/udp" + p2pPort + "/quic-v1",
+	}, magic, c, mp)
 	if err != nil {
 		logger.Fatalf("p2p: %v", err)
 	}
@@ -114,6 +121,15 @@ func main() {
 	// Default bootstrap (network seeds + relays) + user-provided overrides.
 	boot := p2p.DefaultBootstrap(*networkName)
 	boot.Seeds = append(boot.Seeds, splitCSV(*seedAddr)...)
+	// Pull the live seed list published over HTTPS (e.g. pasichdev.xyz) so
+	// new nodes find peers without a binary upgrade. Best-effort: failures
+	// are silent and the node falls back to -seed / DNS / DHT. Disable with
+	// -http-seeds=false (e.g. for air-gapped or private networks).
+	if *httpSeeds {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		boot.Seeds = append(boot.Seeds, p2p.ResolveHTTPSeedStrings(ctx, *networkName)...)
+		cancel()
+	}
 	boot.Relays = append(boot.Relays, splitCSV(*relayAddr)...)
 	node.Bootstrap(boot)
 

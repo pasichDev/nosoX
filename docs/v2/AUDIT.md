@@ -281,3 +281,54 @@ The audit-and-close pass is roughly a one-week ticket for a
 moderately senior crypto engineer + a 4–6 week external audit. After
 that I'd grade it **B+** — competitive with mid-tier privacy coins
 shipped after similar effort.
+
+---
+
+## 8. Audit refresh — 2026-06-06
+
+Re-verified the whole tree against the running code (`go build ./...` clean;
+`go test ./...` → **all 16 packages green**; 102 test functions + 5 fuzz
+harnesses). Several § 2 concerns from the original memo are now **closed**.
+
+### 8.1 Closed since the original memo
+| Original concern | Status | Evidence |
+|---|---|---|
+| § 2.3 No checkpoint-list signing | ✅ done | `v2/types/checkpoint_signature.go` (Ed25519), `checkpoints.go`, tests |
+| § 2.5 RPC has zero authentication | ✅ done | `v2/rpc/rpc.go` Bearer-token auth (`-rpc-token`), `auth_test.go` |
+| § 2.6 No fuzz harnesses | ✅ done | 5 fuzzers: BlockDecode, TxDecode, SchnorrVerify, VerifyRangeBorromean, SlatepackDecode |
+| § 2.9 Wallet keys not mlock'd | ✅ done | `v2/wallet/mlock*.go` + Argon2id/XChaCha20 keystore + wipe in `wallet.go` |
+| § 2.8 (partial) peer DoS | ◑ partial | `v2/p2p/ratelimit.go` per-peer rate limiting added |
+
+### 8.2 Still open (verified current gaps)
+1. **Range proofs are Borromean, not Bulletproofs.** Current ZK range proofs
+   (`v2/crypto/borromean_ct.go`, `rangeproof.go`) are correct but ~10× larger
+   than Bulletproofs and use variable-time EC ops (§ 2.2 / § 2.10 still apply).
+   Bulletproofs are on the roadmap as "replacing Borromean" — **not yet
+   implemented**. Do not advertise Bulletproofs until shipped + audited.
+2. **No atomic-swap / Bisq / Haveno integration** — roadmap "up next", **not
+   implemented**. No HTLC/adaptor-signature code exists yet.
+3. **Test coverage uneven.** Verified per-package: chain 49%, crypto 84%,
+   genesis 85%, mempool 75%, miner 66%, p2p 57%, pow 71%, **rpc 30%**,
+   **types 41%**, wallet 73%. The consensus-critical `chain` and the
+   externally-exposed `rpc` deserve the most new tests before mainnet. "100%"
+   is neither realistic nor a useful gate; target ≥70% on every package and
+   ≥85% on `chain`/`crypto`/`rpc`.
+4. **Independent external audit** (§ 2.1) — still the top blocker; unchanged.
+5. **Seed lists were empty.** Now addressed operationally via HTTPS seed
+   discovery (`v2/p2p/httpseeds.go`, `seeds/*.txt`, served from the launch
+   domain) — but the actual seed entries must be filled at launch.
+
+### 8.3 New since the memo (this pass)
+- **QUIC-v1 transport enabled** (`v2/p2p/libp2p_host.go`, nosoxd listens on
+  TCP + UDP/quic-v1). Improves connectivity on lossy/mobile networks. Note:
+  QUIC's UDP path widens the attack surface slightly — keep an eye on amplification
+  and ensure the OS UDP buffers are sized; libp2p's QUIC stack handles AEAD.
+- **HTTPS seed discovery** added — fetches a published seed file at startup.
+  Risk: a compromised seed host could feed malicious peer addrs; this is
+  mitigated by libp2p's authenticated PeerIDs (a bad addr can't impersonate a
+  good peer) but a hostile host could still eclipse a fresh node. Serve the
+  file over HTTPS only and consider signing it later.
+
+### 8.4 Grade
+Unchanged at **B-** for production; the closed items raise testnet confidence
+but the open § 8.2 list (Bulletproofs, coverage, external audit) gates mainnet.
