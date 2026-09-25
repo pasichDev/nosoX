@@ -1,3 +1,8 @@
+> [!WARNING]
+> **Out of date. The project is archived.** The statuses below were written as goals and
+> overstate the code: consensus does not verify kernel signatures, the coinbase amount or
+> legacy claims. See the warning in the root README.
+
 # Component-by-component readiness
 
 Last revised: 2026-05-31. This document tracks every shipped component:
