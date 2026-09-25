@@ -1,13 +1,14 @@
 # noso-go — NosoX implementation
 
-> **⚠️ TESTNET / RESEARCH ONLY**  
-> This repository implements the **NosoX** cryptocurrency in Go. The
-> code is functional and end-to-end tested, but **mainnet launch is
-> gated on an independent security audit** (see
-> [`docs/v2/AUDIT.md`](docs/v2/AUDIT.md)). Do not use this software to
-> custody real value until the audit completes and the launcher tags
-> v1.0. Until then: **clone, read, test locally, contribute** — but
-> don't run a public mainnet on it.
+> [!WARNING]
+> **Archived research prototype. Not maintained. Consensus is NOT safe.**
+> The node accepts blocks it must reject: kernel signatures on transactions are never
+> verified (anyone can spend anyone's output), the coinbase amount is not enforced when the
+> coinbase kernel is missing (unlimited minting), legacy v1 claims are not signature-checked,
+> a placeholder "v1" range proof is accepted, and block contents are not bound to the header.
+> There is also no fork choice by total work and no pinned genesis. The status tables in
+> `docs/` (READINESS, LAUNCH, AUDIT) describe intent, not the code. Do not run a network or
+> hold value on this software. The code stays available for study under the MIT license.
 
 ## What NosoX is
 
