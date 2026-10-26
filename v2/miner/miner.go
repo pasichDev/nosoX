@@ -68,8 +68,11 @@ func (m *Miner) OnNewBlock(fn func(*types.Block)) {
 
 func (m *Miner) emit(b *types.Block) {
 	m.listenersMu.RLock()
-	defer m.listenersMu.RUnlock()
-	for _, fn := range m.listeners {
+	listeners := append([]func(*types.Block){}, m.listeners...)
+	m.listenersMu.RUnlock()
+	// Invoke user callbacks outside the registration lock. A listener may
+	// register another listener, and callbacks must not block future registration.
+	for _, fn := range listeners {
 		fn(b)
 	}
 }
