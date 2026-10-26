@@ -110,11 +110,19 @@ func fetchSeedURL(ctx context.Context, client *http.Client, url string) ([]strin
 	if err != nil {
 		return nil, err
 	}
+	// Seed lists are unauthenticated discovery hints. Never allow cleartext
+	// retrieval, including a downgrade redirect from an HTTPS seed host.
+	if req.URL.Scheme != "https" || req.URL.Host == "" || req.URL.User != nil {
+		return nil, fmt.Errorf("seed URL must use HTTPS without credentials")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.Request == nil || resp.Request.URL == nil || resp.Request.URL.Scheme != "https" {
+		return nil, fmt.Errorf("seed URL redirected to an insecure transport")
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("seed url %s: status %d", url, resp.StatusCode)
 	}
