@@ -58,3 +58,31 @@ An external reviewer can begin targeted cryptographic/design assessment using
 EXTERNAL_CRYPTO_REVIEW_PACKET.md. The repository is not a final release-audit
 candidate, and no independent reviewer has certified it. No publication or
 repository visibility/archive change has occurred.
+
+## Follow-up: stacked defensive PR #5 (unverified)
+
+PR #5 adds fail-closed Badger historical lookup behavior, malformed hash-index
+rejection, miner cancellation/listener lifecycle fixes, HTTPS-only seed list
+retrieval (including rejection of redirects downgraded to HTTP), and isolated
+regression tests. It also adds `scripts/check-publication.sh` and
+`audit/PUBLIC_SOURCE_PREFLIGHT.md` for the source-code publication gate.
+
+**None of these changes have an executed green full-suite/race result yet.**
+GitHub Actions runs on this private repo terminate before executing any steps:
+the separate echo-only runner-smoke job fails too, and job logs are unavailable.
+Do not interpret that pre-runner failure as a verified Go test failure or
+assume it resolves after changing the workflow. Check Actions billing/budget,
+runner eligibility and account/repository restrictions; obtain a successful
+runner and repeat the documented checks before merging.
+
+The repo was observed private and unarchived at PR #5 creation; earlier
+"private+archived" status above is historical, not a current setting claim.
+
+Source-publication scanning has been *prepared*, not executed. It still needs
+a full local checkout, installed gitleaks, a scan of all local refs/working tree,
+human secret/privacy review, and explicit maintainer authorization.
+
+NX-018/NX-019 independent cryptographic review, NX-020 independently verified
+legacy supply/genesis, full valid-fork/capacity/durability experiments, and
+wallet/P2P assurances remain release blockers. No audit certification, public
+release or mainnet approval is implied by this PR.
