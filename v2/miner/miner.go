@@ -103,7 +103,18 @@ func (m *Miner) Start(ctx context.Context, threads int, rewardTo string) error {
 	m.startedAt = time.Now()
 	done := make(chan struct{})
 	m.done = done
-	go func() { defer close(done); m.run(innerCtx, threads) }()
+	go func() {
+		defer close(done)
+		defer func() {
+			m.mu.Lock()
+			if m.done == done {
+				m.state = StateIdle
+				m.cancel = nil
+			}
+			m.mu.Unlock()
+		}()
+		m.run(innerCtx, threads)
+	}()
 	return nil
 }
 
@@ -162,7 +173,13 @@ func (m *Miner) run(ctx context.Context, threads int) {
 		// Build a fresh candidate from the current tip.
 		candidate, err := m.makeCandidate()
 		if err != nil {
-			time.Sleep(2 * time.Second)
+			// A missing tip or reward store may persist; avoid a busy loop,
+			// but let parent cancellation stop the miner immediately.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
 			continue
 		}
 		// Race threads to find a nonce.
