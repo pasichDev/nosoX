@@ -89,3 +89,8 @@ coinbase signatures, точну емісію, maturity, stored metadata, дуб�
 Рішення лишається **RESEARCH ONLY / MAINNET BLOCKED**. Це не independent audit
 і не готовність до public testnet чи фінального release audit. Налаштування
 репозиторію не змінювалися; нічого не розгорнуто, не опубліковано і не merged.
+
+Сирі scanner-логи збережено без нормалізації: загальний git diff --check
+повернув2 через кінцевий blank line і trailing space саме у двох логах.
+Перевірка diff без audit/logs повернула0. Ці діагностичні повідомлення
+зафіксовано окремо; Go build/test/vet/race результати вище не змінювалися.

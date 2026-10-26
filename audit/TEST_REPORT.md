@@ -141,3 +141,13 @@ not full signed-release/reproducibility validation. No public crypto network was
 contacted. All these limitations remain explicit gates where relevant.
 
 SP1/2/3 dispositions and next safe steps are in VERIFICATION_SUMMARY.md.
+
+## Preserved raw-log whitespace diagnostics
+
+`git diff --check 6179eb56d53768a19950f07e9c806fd384572c5d HEAD`
+returned2 solely for two captured scanner-log formatting diagnostics:
+audit/logs/govulncheck-version.log has a final blank line, and
+audit/logs/govulncheck.log preserves the scanner's trailing space. Raw evidence
+was intentionally not rewritten. The same check with
+`-- . ':!audit/logs'` returned0 for source, tests and documentation. These are
+log-format diagnostics, not passing code checks or new security findings.
