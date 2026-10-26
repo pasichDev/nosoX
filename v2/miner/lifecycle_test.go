@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // The daemon's parent context may expire without a direct Stop call.
@@ -36,5 +37,20 @@ func TestParentCancellationRestoresIdleAndAllowsRestart(t *testing.T) {
 	m.Stop()
 	if state := m.Stats().State; state != StateIdle {
 		t.Fatalf("miner state after Stop = %v, want idle", state)
+	}
+}
+
+func TestBlockListenerCanRegisterAnotherListener(t *testing.T) {
+	m := &Miner{}
+	done := make(chan struct{})
+	m.OnNewBlock(func(*types.Block) {
+		m.OnNewBlock(func(*types.Block) {})
+		close(done)
+	})
+	go m.emit(&types.Block{})
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("block listener registration deadlocked on emit")
 	}
 }
