@@ -1,0 +1,200 @@
+=== RUN   TestSecurityBlockAuthorizationMutations
+=== RUN   TestSecurityBlockAuthorizationMutations/memory
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/duplicate_subsidy
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/legacy_mint
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/unknown_feature
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/offset
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/foreign_network
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/coinbase_lock
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/missing_subsidy
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/missing_signature
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/wrong_signature
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/wrong_subsidy_value
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/version
+=== RUN   TestSecurityBlockAuthorizationMutations/memory/coinbase_fee
+=== RUN   TestSecurityBlockAuthorizationMutations/badger
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/duplicate_subsidy
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/legacy_mint
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/unknown_feature
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/offset
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/foreign_network
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/coinbase_lock
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/missing_subsidy
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/missing_signature
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/wrong_signature
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/wrong_subsidy_value
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/version
+=== RUN   TestSecurityBlockAuthorizationMutations/badger/coinbase_fee
+--- PASS: TestSecurityBlockAuthorizationMutations (2.32s)
+    --- PASS: TestSecurityBlockAuthorizationMutations/memory (1.18s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/duplicate_subsidy (0.15s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/legacy_mint (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/unknown_feature (0.10s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/offset (0.05s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/foreign_network (0.04s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/coinbase_lock (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/missing_subsidy (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/missing_signature (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/wrong_signature (0.15s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/wrong_subsidy_value (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/version (0.04s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/memory/coinbase_fee (0.09s)
+    --- PASS: TestSecurityBlockAuthorizationMutations/badger (1.13s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/duplicate_subsidy (0.14s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/legacy_mint (0.18s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/unknown_feature (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/offset (0.04s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/foreign_network (0.05s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/coinbase_lock (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/missing_subsidy (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/missing_signature (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/wrong_signature (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/wrong_subsidy_value (0.09s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/version (0.05s)
+        --- PASS: TestSecurityBlockAuthorizationMutations/badger/coinbase_fee (0.09s)
+=== RUN   TestSecurityReorgRollbackAndStrictWork
+=== RUN   TestSecurityReorgRollbackAndStrictWork/memory
+=== RUN   TestSecurityReorgRollbackAndStrictWork/badger
+--- PASS: TestSecurityReorgRollbackAndStrictWork (2.09s)
+    --- PASS: TestSecurityReorgRollbackAndStrictWork/memory (0.98s)
+    --- PASS: TestSecurityReorgRollbackAndStrictWork/badger (1.11s)
+=== RUN   TestSecurityReorgCommitFailureUnchanged
+--- PASS: TestSecurityReorgCommitFailureUnchanged (0.32s)
+=== RUN   TestSecurityNativeAuthorizationMaturityAndUndo
+=== RUN   TestSecurityNativeAuthorizationMaturityAndUndo/memory
+=== RUN   TestSecurityNativeAuthorizationMaturityAndUndo/badger
+--- PASS: TestSecurityNativeAuthorizationMaturityAndUndo (13.08s)
+    --- PASS: TestSecurityNativeAuthorizationMaturityAndUndo/memory (6.44s)
+    --- PASS: TestSecurityNativeAuthorizationMaturityAndUndo/badger (6.65s)
+=== RUN   TestSecurityBadgerAbruptExit
+--- PASS: TestSecurityBadgerAbruptExit (0.96s)
+=== RUN   TestSecurityBackendParityAndNestedSlices
+--- PASS: TestSecurityBackendParityAndNestedSlices (0.83s)
+=== RUN   TestSecurityLegacyClaimFailsClosed
+=== RUN   TestSecurityLegacyClaimFailsClosed/memory
+=== RUN   TestSecurityLegacyClaimFailsClosed/badger
+--- PASS: TestSecurityLegacyClaimFailsClosed (0.29s)
+    --- PASS: TestSecurityLegacyClaimFailsClosed/memory (0.14s)
+    --- PASS: TestSecurityLegacyClaimFailsClosed/badger (0.15s)
+=== RUN   TestSecurityBadgerOversizeTransactionRollback
+--- PASS: TestSecurityBadgerOversizeTransactionRollback (0.43s)
+=== RUN   TestSecurityBadgerMissingTipFailsClosed
+--- PASS: TestSecurityBadgerMissingTipFailsClosed (0.10s)
+=== RUN   TestSecurityShorterHeavierForkWins
+--- PASS: TestSecurityShorterHeavierForkWins (32.78s)
+=== RUN   TestSecurityFutureTimestampCannotFreezeChain
+=== RUN   TestSecurityFutureTimestampCannotFreezeChain/memory
+=== RUN   TestSecurityFutureTimestampCannotFreezeChain/badger
+--- PASS: TestSecurityFutureTimestampCannotFreezeChain (0.57s)
+    --- PASS: TestSecurityFutureTimestampCannotFreezeChain/memory (0.22s)
+    --- PASS: TestSecurityFutureTimestampCannotFreezeChain/badger (0.35s)
+=== RUN   TestSecuritySyntheticScheduleEdgesThroughAddBlock
+=== RUN   TestSecuritySyntheticScheduleEdgesThroughAddBlock/209999
+=== RUN   TestSecuritySyntheticScheduleEdgesThroughAddBlock/210000
+=== RUN   TestSecuritySyntheticScheduleEdgesThroughAddBlock/210001
+=== RUN   TestSecuritySyntheticScheduleEdgesThroughAddBlock/2309999
+=== RUN   TestSecuritySyntheticScheduleEdgesThroughAddBlock/2310000
+=== RUN   TestSecuritySyntheticScheduleEdgesThroughAddBlock/2310001
+--- PASS: TestSecuritySyntheticScheduleEdgesThroughAddBlock (0.59s)
+    --- PASS: TestSecuritySyntheticScheduleEdgesThroughAddBlock/209999 (0.09s)
+    --- PASS: TestSecuritySyntheticScheduleEdgesThroughAddBlock/210000 (0.09s)
+    --- PASS: TestSecuritySyntheticScheduleEdgesThroughAddBlock/210001 (0.09s)
+    --- PASS: TestSecuritySyntheticScheduleEdgesThroughAddBlock/2309999 (0.09s)
+    --- PASS: TestSecuritySyntheticScheduleEdgesThroughAddBlock/2310000 (0.09s)
+    --- PASS: TestSecuritySyntheticScheduleEdgesThroughAddBlock/2310001 (0.09s)
+=== RUN   TestSecurityReorgRejectsMalformedBeforePrefixRead
+--- PASS: TestSecurityReorgRejectsMalformedBeforePrefixRead (0.09s)
+=== RUN   TestSecurityMissingCoinbaseRejected
+--- PASS: TestSecurityMissingCoinbaseRejected (0.13s)
+=== RUN   TestSecurityStoredBlocksAreImmutable
+--- PASS: TestSecurityStoredBlocksAreImmutable (0.05s)
+=== RUN   TestSecurityReopenPinsGenesis
+--- PASS: TestSecurityReopenPinsGenesis (0.05s)
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/wrong_parent
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/wrong_parent/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/wrong_parent/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/missing_input
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/missing_input/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/missing_input/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_input
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_input/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_input/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_output
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_output/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_output/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/unspent_output
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/unspent_output/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/unspent_output/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/spent_historical_output
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/spent_historical_output/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/spent_historical_output/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_kernel
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_kernel/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/duplicate_kernel/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/wrong_height
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/wrong_height/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/wrong_height/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_feature
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_feature/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_feature/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_address
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_address/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_address/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_amount
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_amount/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/input_amount/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/same_input_output
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/same_input_output/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/same_input_output/badger
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/historical_kernel
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/historical_kernel/memory
+=== RUN   TestSecurityStoreRejectsImpossibleDeltas/historical_kernel/badger
+--- PASS: TestSecurityStoreRejectsImpossibleDeltas (1.54s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/wrong_parent (0.14s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/wrong_parent/memory (0.04s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/wrong_parent/badger (0.09s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/missing_input (0.11s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/missing_input/memory (0.04s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/missing_input/badger (0.07s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_input (0.11s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_input/memory (0.04s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_input/badger (0.07s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_output (0.11s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_output/memory (0.04s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_output/badger (0.06s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/unspent_output (0.11s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/unspent_output/memory (0.04s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/unspent_output/badger (0.06s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/spent_historical_output (0.10s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/spent_historical_output/memory (0.04s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/spent_historical_output/badger (0.06s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_kernel (0.10s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_kernel/memory (0.05s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/duplicate_kernel/badger (0.06s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/wrong_height (0.11s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/wrong_height/memory (0.05s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/wrong_height/badger (0.06s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_feature (0.11s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_feature/memory (0.04s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_feature/badger (0.06s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_address (0.18s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_address/memory (0.09s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_address/badger (0.08s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_amount (0.16s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_amount/memory (0.09s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/input_amount/badger (0.06s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/same_input_output (0.11s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/same_input_output/memory (0.04s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/same_input_output/badger (0.06s)
+    --- PASS: TestSecurityStoreRejectsImpossibleDeltas/historical_kernel (0.11s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/historical_kernel/memory (0.05s)
+        --- PASS: TestSecurityStoreRejectsImpossibleDeltas/historical_kernel/badger (0.06s)
+=== RUN   TestSecurityStoreBadgerDecodeFailureUnchanged
+=== RUN   TestSecurityStoreBadgerDecodeFailureUnchanged/utxo
+=== RUN   TestSecurityStoreBadgerDecodeFailureUnchanged/tip
+--- PASS: TestSecurityStoreBadgerDecodeFailureUnchanged (0.12s)
+    --- PASS: TestSecurityStoreBadgerDecodeFailureUnchanged/utxo (0.07s)
+    --- PASS: TestSecurityStoreBadgerDecodeFailureUnchanged/tip (0.05s)
+PASS
+ok  	github.com/pasichDev/noso-go/v2/chain	56.364s

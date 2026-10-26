@@ -1,0 +1,7 @@
+--- FAIL: TestOutputIdentityBindsProof (0.00s)
+    hardening_test.go:8: proof mutation preserves output identity
+--- FAIL: TestOutputIdentityBindsAllMetadata (0.00s)
+    hardening_test.go:14: metadata mutation preserves output identity
+FAIL
+FAIL	github.com/noso-project/noso-go/v2/types	0.003s
+FAIL

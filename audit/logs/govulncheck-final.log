@@ -1,0 +1,65 @@
+=== Symbol Results ===
+
+Vulnerability #1: GO-2026-6165
+    Panic while parsing crafted ECDHE_PSK ServerKeyExchange in
+    github.com/pion/dtls/v3
+  More info: https://pkg.go.dev/vuln/GO-2026-6165
+  Module: github.com/pion/dtls/v3
+    Found in: github.com/pion/dtls/v3@v3.1.2
+    Fixed in: github.com/pion/dtls/v3@v3.1.4
+    Example traces found:
+      #1: v2/chain/badger_store.go:53:56: chain.BadgerStore.Close calls badger.DB.Close, which eventually calls handshake.Handshake.Unmarshal
+
+Vulnerability #2: GO-2026-6099
+    webtransport-go: Memory Exhaustion Attack due to Buffering of Unknown
+    Capsules in github.com/quic-go/webtransport-go
+  More info: https://pkg.go.dev/vuln/GO-2026-6099
+  Module: github.com/quic-go/webtransport-go
+    Found in: github.com/quic-go/webtransport-go@v0.10.0
+    Fixed in: github.com/quic-go/webtransport-go@v0.11.1
+    Example traces found:
+      #1: v2/chain/badger_store.go:53:56: chain.BadgerStore.Close calls badger.DB.Close, which eventually calls webtransport.AddSession
+      #2: v2/chain/badger_store.go:53:56: chain.BadgerStore.Close calls badger.DB.Close, which eventually calls webtransport.Close
+      #3: v2/p2p/sync.go:151:28: p2p.Libp2pNode.GetBlocks calls basic.BasicHost.NewStream, which eventually calls webtransport.Session.AcceptStream
+      #4: v2/chain/badger_store.go:53:56: chain.BadgerStore.Close calls badger.DB.Close, which eventually calls webtransport.Session.CloseWithError
+      #5: v2/p2p/sync.go:151:28: p2p.Libp2pNode.GetBlocks calls basic.BasicHost.NewStream, which eventually calls webtransport.Session.Context
+      #6: v2/p2p/sync.go:151:28: p2p.Libp2pNode.GetBlocks calls basic.BasicHost.NewStream, which eventually calls webtransport.Session.OpenStreamSync
+      #7: v2/wallet/wallet.go:142:24: wallet.Wallet.Save calls rand.Read, which calls webtransport.SessionError.Error
+      #8: v2/chain/badger_store.go:103:14: chain.BadgerStore.Tip calls errors.Is, which eventually calls webtransport.SessionError.Is
+      #9: v2/p2p/sync.go:155:2: p2p.Libp2pNode.GetBlocks calls swarm.Stream.Close, which eventually calls webtransport.Stream.CancelRead
+      #10: v2/p2p/sync.go:151:28: p2p.Libp2pNode.GetBlocks calls basic.BasicHost.NewStream, which eventually calls webtransport.Stream.CancelWrite
+      #11: v2/p2p/sync.go:155:2: p2p.Libp2pNode.GetBlocks calls swarm.Stream.Close, which eventually calls webtransport.Stream.Close
+      #12: v2/p2p/httpseeds.go:32:13: p2p.ParseSeedList calls bufio.Scanner.Scan, which eventually calls webtransport.Stream.Read
+      #13: v2/p2p/sync.go:158:19: p2p.Libp2pNode.GetBlocks calls swarm.Stream.SetDeadline, which calls webtransport.Stream.SetDeadline
+      #14: v2/p2p/sync.go:155:2: p2p.Libp2pNode.GetBlocks calls basic.streamWrapper.Close, which eventually calls webtransport.Stream.SetReadDeadline
+      #15: v2/p2p/libp2p_host.go:101:32: p2p.NewLibp2p calls libp2p.NewGossipSub, which eventually calls webtransport.Stream.SetWriteDeadline
+      #16: v2/p2p/sync.go:166:22: p2p.Libp2pNode.GetBlocks calls swarm.Stream.Write, which eventually calls webtransport.Stream.Write
+      #17: v2/wallet/wallet.go:142:24: wallet.Wallet.Save calls rand.Read, which calls webtransport.StreamError.Error
+      #18: v2/chain/badger_store.go:103:14: chain.BadgerStore.Tip calls errors.Is, which eventually calls webtransport.StreamError.Is
+      #19: v2/chain/badger_store.go:53:56: chain.BadgerStore.Close calls badger.DB.Close, which eventually calls webtransport.closeWithSession
+      #20: v2/chain/badger_store.go:53:56: chain.BadgerStore.Close calls badger.DB.Close, which eventually calls webtransport.closeWithSession
+      #21: v2/p2p/libp2p_host.go:31:2: p2p.init calls libp2p.init, which eventually calls webtransport.init
+      #22: v2/chain/badger_store.go:53:56: chain.BadgerStore.Close calls badger.DB.Close, which eventually calls webtransport.initialize
+
+Vulnerability #3: GO-2026-5676
+    HTTP/3 QPACK Trailer Expansion Memory Exhaustion in
+    github.com/quic-go/quic-go
+  More info: https://pkg.go.dev/vuln/GO-2026-5676
+  Module: github.com/quic-go/quic-go
+    Found in: github.com/quic-go/quic-go@v0.59.0
+    Fixed in: github.com/quic-go/quic-go@v0.59.1
+    Example traces found:
+      #1: cmd/nosoxd/main.go:176:32: nosoxd.main calls http.Server.ListenAndServe, which eventually calls http3.ConfigureTLSConfig
+      #2: v2/wallet/wallet.go:142:24: wallet.Wallet.Save calls rand.Read, which calls http3.Error.Error
+      #3: v2/p2p/httpseeds.go:32:13: p2p.ParseSeedList calls bufio.Scanner.Scan, which eventually calls http3.Stream.Read
+      #4: v2/chain/badger_store.go:53:56: chain.BadgerStore.Close calls badger.DB.Close, which eventually calls http3.Stream.Write
+      #5: v2/p2p/sync.go:174:26: p2p.Libp2pNode.GetBlocks calls io.ReadFull, which eventually calls http3.countingByteReader.Read
+      #6: v2/wallet/wallet.go:317:25: wallet.readBoundedSecret calls io.ReadAll, which calls http3.exactReader.Read
+      #7: v2/wallet/wallet.go:142:24: wallet.Wallet.Save calls rand.Read, which calls http3.qpackError.Error
+
+Your code is affected by 3 vulnerabilities from 3 modules.
+This scan also found 6 vulnerabilities in packages you import and 15
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.
+exit status 3

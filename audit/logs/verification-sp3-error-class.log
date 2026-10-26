@@ -1,0 +1,4 @@
+=== RUN   TestSecurityBadgerOversizeTransactionRollback
+--- PASS: TestSecurityBadgerOversizeTransactionRollback (3.36s)
+PASS
+ok  	github.com/pasichDev/noso-go/v2/chain	4.473s

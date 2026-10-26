@@ -1,0 +1,20 @@
+	github.com/pasichDev/noso-go/cmd/nosocli		coverage: 0.0% of statements
+	github.com/pasichDev/noso-go/cmd/nosod		coverage: 0.0% of statements
+	github.com/pasichDev/noso-go/cmd/nosox-cli		coverage: 0.0% of statements
+ok  	github.com/pasichDev/noso-go/cmd/nosoxd	0.010s	coverage: 16.0% of statements
+ok  	github.com/pasichDev/noso-go/internal/blockchain	0.014s	coverage: 75.5% of statements
+ok  	github.com/pasichDev/noso-go/internal/codec	0.007s	coverage: 47.9% of statements
+ok  	github.com/pasichDev/noso-go/internal/crypto	0.020s	coverage: 73.5% of statements
+ok  	github.com/pasichDev/noso-go/internal/network	0.026s	coverage: 61.8% of statements
+ok  	github.com/pasichDev/noso-go/internal/storage	0.011s	coverage: 41.9% of statements
+ok  	github.com/pasichDev/noso-go/internal/types	0.015s	coverage: 96.3% of statements
+ok  	github.com/pasichDev/noso-go/v2/chain	74.684s	coverage: 80.7% of statements
+ok  	github.com/pasichDev/noso-go/v2/crypto	1.083s	coverage: 83.4% of statements
+ok  	github.com/pasichDev/noso-go/v2/genesis	0.359s	coverage: 87.6% of statements
+ok  	github.com/pasichDev/noso-go/v2/mempool	0.004s	coverage: 66.9% of statements
+ok  	github.com/pasichDev/noso-go/v2/miner	0.911s	coverage: 68.0% of statements
+ok  	github.com/pasichDev/noso-go/v2/p2p	26.605s	coverage: 66.2% of statements
+ok  	github.com/pasichDev/noso-go/v2/pow	6.011s	coverage: 78.0% of statements
+ok  	github.com/pasichDev/noso-go/v2/rpc	0.014s	coverage: 40.9% of statements
+ok  	github.com/pasichDev/noso-go/v2/types	0.011s	coverage: 67.4% of statements
+ok  	github.com/pasichDev/noso-go/v2/wallet	0.548s	coverage: 70.4% of statements

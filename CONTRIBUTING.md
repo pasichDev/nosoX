@@ -1,78 +1,36 @@
-# Contributing to NosoX
+# Contributing to unsafe NosoX research
 
-> Before you start: this is currently a **testnet/research repo**.
-> Mainnet launch waits on the external audit. Treat the code as a
-> design vehicle, not as production money infrastructure.
+Read [release blockers](audit/RELEASE_READINESS.md) and
+[consensus invariants](audit/CONSENSUS_INVARIANTS.md) before editing validation.
+This is not production money infrastructure or an independently audited project.
 
-## How to set up
+Use Go 1.27.3 (`go.mod` is authoritative). Clone `pasichDev/noso-go` into a private
+working checkout, use a feature branch, then run:
 
 ```bash
-git clone https://github.com/<you>/noso-go
-cd noso-go
+go fmt ./...
 go build ./...
-go test ./...
+go vet ./...
+go test ./... -count=1
+go test -race ./... -count=1
 ```
 
-Go 1.23 or newer required. No CGO. All dependencies are pinned via
-`go.mod` / `go.sum`.
+Bound package parallelism with `-p 2` on constrained machines. Cache paths must
+be writable. See [TEST_REPORT.md](audit/TEST_REPORT.md) for fuzz commands, scanner
+versions, local integration and measured limits. Never connect test fixtures or
+adversarial tests to public hosts or cryptocurrency networks.
 
-## What's most welcome
+For validation changes, add a negative test through AddBlock/ValidateTransaction/
+ReorgTo, a valid control and state-unchanged assertion on both stores. Preserve
+historical fixture bytes and explicitly document rejection/compatibility changes.
+Tests must exercise intended rejection reasons; earlier guard failures can hide
+missing checks. Never weaken monetary or ownership rules to satisfy a fixture.
 
-In order of where help is most needed:
+Do not assert constant-time behavior from an API name: current secret operations
+have unresolved timing risks. Any new cryptographic dependency or construction
+requires justification and independent review. Do not change subsidy, GVT value,
+premine or fee destination as an incidental fix.
 
-1. **Audit feedback.** When the external review starts, public
-   reproduction of findings is critical. Please file issues with
-   minimal reproducers.
-2. **Mobile light-client.** Compact filters ship; we need a wallet
-   mode that syncs filters instead of full blocks. Reference:
-   `v2/types/filter.go`, BIP-157/158-style protocol.
-3. **Encrypted messenger protocol** on top of `v2/crypto` and
-   `v2/p2p`. Design doc PR appreciated before implementation.
-4. **Translations.** Documentation in Ukrainian, Spanish, Japanese,
-   German is sorely missing. Open a PR with `docs/v2/<file>.<lang>.md`.
-5. **Repro test cases for AUDIT.md items** as they get closed.
-
-## What's NOT welcome
-
-- Premine / founder allocation requests. Locked at 0 by spec.
-- "Quick exchange listing" pitches. Read `docs/v2/EXCHANGES.md`.
-- Marketing copy that promises mainnet-grade safety. We're honest:
-  pre-audit, testnet-only.
-- Adding `v2/types` fields without a corresponding hard-fork plan.
-  Consensus rules are stable.
-
-## Coding standards
-
-- `gofmt -s` everything before committing.
-- Tests for new public functions. The bar is "round-trip + tamper +
-  wrong-input" coverage at minimum.
-- Constant-time primitives for any new code that touches secrets
-  (private keys, blinding factors). Use `decred/dcrd/dcrec/secp256k1/v4`
-  `ModNScalar` / `PrivateKey.PubKey()` patterns from `v2/crypto/schnorr_ct.go`
-  and `v2/crypto/borromean_ct.go`.
-- No new dependencies without justification.
-- Don't add emojis to source files.
-
-## Commit messages
-
-Format: `<area>: <short imperative>` — example:
-
-```
-v2/wallet: claim builder produces real signed Transaction
-docs/v2: README documents migration test procedure
-v2/p2p: drop the old JSON-TCP gossip (superseded by libp2p)
-```
-
-## License
-
-Contributing implies you license your contribution under the
-project's MIT license.
-
-## Security disclosure
-
-For security issues, please **do not open a public issue**. Email
-the maintainer (contact info on the project's GitHub profile) or
-use GitHub's private-issue feature.
-
-We will not run a bug-bounty program until after the external audit
-and mainnet launch.
+Use focused imperative commits. Do not publish vulnerabilities or secrets in
+public issues; use an established private maintainer contact. No public disclosure
+SLA, private GitHub reporting facility or bounty is assumed. MIT license applies.

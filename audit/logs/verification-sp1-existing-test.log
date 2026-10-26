@@ -1,0 +1,4 @@
+=== RUN   TestExpectedDevFundCommitDeterministic
+--- PASS: TestExpectedDevFundCommitDeterministic (0.01s)
+PASS
+ok  	github.com/pasichDev/noso-go/v2/chain	0.022s

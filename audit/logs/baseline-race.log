@@ -1,0 +1,20 @@
+?   	github.com/noso-project/noso-go/cmd/nosocli	[no test files]
+?   	github.com/noso-project/noso-go/cmd/nosod	[no test files]
+?   	github.com/noso-project/noso-go/cmd/nosox-cli	[no test files]
+?   	github.com/noso-project/noso-go/cmd/nosoxd	[no test files]
+ok  	github.com/noso-project/noso-go/internal/blockchain	1.190s
+ok  	github.com/noso-project/noso-go/internal/codec	1.020s
+ok  	github.com/noso-project/noso-go/internal/crypto	1.195s
+ok  	github.com/noso-project/noso-go/internal/network	1.221s
+ok  	github.com/noso-project/noso-go/internal/storage	1.035s
+ok  	github.com/noso-project/noso-go/internal/types	1.081s
+ok  	github.com/noso-project/noso-go/v2/chain	45.625s
+ok  	github.com/noso-project/noso-go/v2/crypto	20.360s
+ok  	github.com/noso-project/noso-go/v2/genesis	42.431s
+ok  	github.com/noso-project/noso-go/v2/mempool	1.024s
+ok  	github.com/noso-project/noso-go/v2/miner	2.730s
+ok  	github.com/noso-project/noso-go/v2/p2p	6.143s
+ok  	github.com/noso-project/noso-go/v2/pow	18.551s
+ok  	github.com/noso-project/noso-go/v2/rpc	1.027s
+ok  	github.com/noso-project/noso-go/v2/types	1.035s
+ok  	github.com/noso-project/noso-go/v2/wallet	3.613s

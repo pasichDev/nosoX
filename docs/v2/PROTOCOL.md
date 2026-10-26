@@ -1,143 +1,86 @@
-# Noso v2 protocol
+# Experimental version-2 validation rules
 
-Authoritative for the wire format and validation rules. The Go
-implementation under `v2/` MUST match this doc; if it doesn't, the doc
-or the code is a bug.
+**Unsafe research specification. Mainnet blocked.** This describes this branch,
+not the prior version-1 wire format or an independently reviewed protocol.
+[Breaking changes and open decisions](../../audit/PROTOCOL_CHANGES.md) are normative
+for compatibility. Existing histories are not silently grandfathered.
 
-## Constants
+## Header and body binding
 
-| Constant                     | Value                              |
-| ---------------------------- | ---------------------------------- |
-| `BlockVersion`               | 1                                  |
-| `TargetBlockTimeSeconds`     | 120                                |
-| `CoinbaseLock`               | 60 blocks                          |
-| `DifficultyWindow` (LWMA-3)  | 90                                 |
-| `MinDifficulty`              | 1                                  |
-| `CoinUnits`                  | 100_000_000 (8 decimals)           |
-| `InitialReward`              | 5_000_000_000 base units           |
-| `BlockHalvingInterval`       | 210_000                            |
-| `HalvingSteps`               | 10                                 |
-| `NetworkMagicMainnet`        | 0x4e4f5832 ("NOX2")                |
-| `NetworkMagicTestnet`        | 0x4e4f5854 ("NOXT")                |
+`types.EncodeHeader` serializes big-endian Version(uint32), NetworkMagic(uint32),
+Height(uint64), Timestamp(int64), PrevHash(32), OutputRoot(32), KernelRoot(32),
+TotalKernelOffset(33), Difficulty(uint64), Nonce(uint64). HeaderID is SHA-256.
+Version must equal 2, network must match the parent's, offset must be all zero.
+Offsets have no supported algebra and are rejected.
 
-## Block header
+`types.BlockRoots` independently hashes complete ordered body lists. OutputRoot
+is SHA-256 of domain `NosoX/block/outputs/v2\0` plus output count and length-
+delimited encoded outputs. KernelRoot uses `NosoX/block/inputs-kernels/v2\0`
+plus the input list and signed kernel list. Every list count and variable field
+length uses big-endian uint64. See `types/commitments.go` for exact field order.
+These are ordered list commitments, not the old duplicate-last Merkle trees.
+Proofs, input ownership fields, signatures and otherwise-unused metadata are bound.
 
-Canonical encoding (big-endian, no padding):
+KernelID hashes `NosoX/kernel/v2\0`, feature, fee, lock height and excess, excluding
+its own signature. OutputID includes all fields and the proof. TransactionID uses
+a distinct transaction domain and both complete lists. Canonical nil and empty
+slices have the same zero-length encoding. Unsupported nonempty metadata fails
+validation. Cut-through/proof rewriting is not supported by these commitments.
 
-```
-[4]  version
-[8]  height
-[8]  timestamp     (unix seconds)
-[32] prev_hash     SHA-256
-[32] output_root   Merkle SHA-256 of OutputID per Output
-[32] kernel_root   Merkle SHA-256 of KernelID per Kernel
-[33] total_kernel_offset   Pedersen commitment
-[8]  difficulty
-[8]  nonce
-```
+## Authorization and supply
 
-The block hash is `SHA-256(encoded_header)`. PoW validity:
+Each input must match an unspent stored commitment and its feature/metadata;
+inputs are unique, and coinbase spends require at least 60 blocks of maturity.
+New output commitments and kernel IDs must also be unique over active-chain
+history, preventing reuse after spending. Reorg removes orphaned identities.
+Legacy and LegacyGVT spends fail closed pending a separately reviewed ownership
+format and verification procedure. Legacy/GVT outputs are genesis-only.
 
-```
-Argon2id(encoded_header) <= MaxTarget / difficulty
-```
+Every ordinary kernel verifies the custom 65-byte Schnorr signature over KernelID
+with its canonical nonidentity excess point as public key; lock height must not
+exceed block height. Coinbase has exactly one output and matching kernel while
+BlockReward(height)>0; both are absent afterwards. Coinbase fee=0 and kernel
+lock=height+60. Its signature is mandatory under `commit-reward*H`, with the
+wallet's height/amount/commit transcript. No claim of cross-network signing
+intent guarantees beyond the enforced header domain is made.
 
-with `MaxTarget = 2^256 - 1` and parameters memory=64 MiB, time=1,
-threads=1, salt=`"NosoX-v1-PoW-salt-32B-deterministic"`.
+The transfer equation is `sum(plain outputs)-sum(inputs)+fee*H=sum(tx excesses)`.
+Coinbase is separately constrained to the existing subsidy. Fees go to the
+existing transparent dev-fund output `fee*H+DevFundPoint`; they are transfers,
+not new issuance. Every fee sum must fit int64. Repeated fee sums collide in this
+output design: fail-closed rejection is a release blocker, not a reason to relax
+historical uniqueness. There is no burn feature. Issued supply includes all
+locked/unclaimed outputs and the explicitly trusted genesis allocation.
 
-## Output
+Plain outputs require the version-2 bit-decomposition OR proof, exact shape plus
+real cryptographic verification. The old version-1 shape-only branch is gone.
+This custom proof system and secret-dependent arithmetic need external review.
 
-```go
-Output {
-  Features      uint8   // 0 = Plain, 1 = Coinbase, 2 = Legacy
-  Commit        [33]    // Pedersen commitment (compressed point)
-  RangeProof    bytes   // present only when Features == Plain
-  LegacyAddress string  // present only when Features == Legacy
-  LegacyAmount  int64   // present only when Features == Legacy
-}
-```
+## Headers, work and state
 
-`OutputID` is `SHA-256` of the canonical preimage:
+A non-genesis block must extend the active tip at height+1, advance timestamp,
+be no more than two hours ahead of validator UTC time, match expected difficulty
+and checkpoints, and satisfy Argon2id PoW. Clocks are an explicit trust assumption.
+PoW remains 64MiB, one pass/lane with the original fixed salt and encoded header.
+Zero difficulty is invalid. Difficulty uses the existing weighted-window formula
+with exact big integers and uint64 saturation. Equivalence to a published LWMA-3
+variant has not been established. Missing history fails closed.
 
-```
-[1] features
-[33] commit
-(if Legacy:)
-[utf-8 of LegacyAddress]
-[8] big-endian LegacyAmount
-```
+Forks must have strictly greater sum(floor(2^256/(target+1))) over the divergent
+suffix; equal work does not replace the tip. The effective suffix/depth cap is
+1024, not the previously advertised 5400. Candidates validate in isolated state
+before one atomic backend replacement. Memory snapshots require explicit Save/
+Close; they do not promise per-AddBlock durability. Badger uses synchronous writes.
+Full-history materialization and database transaction limits remain blockers.
 
-Note the range proof is NOT in the OutputID preimage, so cut-through can
-rewrite proofs without altering identities.
+The operator-supplied genesis is a local trust anchor. Reopen checks its hash and
+replays all non-genesis history, then compares derived persistent state. This is
+not a canonical mainnet genesis or proof of historical economic correctness.
 
-## Kernel
+## Bounds and wire
 
-```go
-Kernel {
-  Features    uint8  // 0 = Plain, 1 = Coinbase, 2 = LegacyClaim
-  Fee         uint64
-  LockHeight  uint64
-  Excess      [33]   // Pedersen commitment to the excess blinding factor
-  ExcessSig   bytes  // Schnorr-style sig (on KernelID) by Excess
-}
-```
-
-`KernelID` is `SHA-256` of `[features || fee || lock_height || excess]`.
-
-A block is **conservation-valid** iff:
-
-```
-Σ output_commits − Σ input_commits − Σ kernel_excess − total_kernel_offset
-   == fee · H
-```
-
-where H is the deterministic NUMS point derived from
-`SHA-256("Noso v2 Pedersen H point")`.
-
-For legacy outputs whose amount is explicit, the commitment uses a
-public blinding factor `SHA-256("NosoX legacy blind " + legacy_address)`,
-so any node can verify legacy commitments without secret data.
-
-## Legacy claim
-
-To spend a legacy output, the spender includes an `Input` with:
-
-```
-Features      = Legacy
-Commit        = the legacy commit
-LegacySig     = Base64 DER ECDSA(SHA-1) signature by the original
-                  secp256k1 key over the canonical claim message
-LegacyAddr    = original "N…" address
-LegacyAmount  = the carried balance
-```
-
-Canonical claim message:
-
-```
-NOSOX-LEGACY-SPEND <legacy_address> <hex(commit)> <block_height>
-```
-
-## Difficulty
-
-Standard LWMA-3 (Zawy) over the last 90 blocks. For the first 90 blocks
-the difficulty stays pinned to the genesis value. Floor: `MinDifficulty`.
-
-## Reward schedule
-
-```
-height = 0   → no coinbase (legacy outputs only)
-0 < h < 210_000 * (HalvingSteps + 1)
-             → InitialReward >> (h / 210_000)
-otherwise    → 0
-```
-
-## P2P
-
-Line-delimited JSON over TCP. Each message is one `Envelope`:
-
-```json
-{"type": "HELLO|NEWBLOCK|NEWTX", "body": {...}}
-```
-
-Bound max line size: 1 MiB. Connections idle out at 30 seconds without
-a read.
+Consensus bodies: at most 10000 inputs/outputs/kernels each, 8MiB accounted body,
+proof<=65536 bytes, input text<=256 bytes each, kernel signature<=65 bytes.
+Mempool/network admission may be stricter. Version-2 topics and `/noso/*/2`
+streams use bounded JSON instead of gob; sync ranges<=64 blocks, framed response
+<=16MiB. These limits are not a proof against all resource exhaustion or Sybils.

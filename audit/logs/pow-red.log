@@ -1,0 +1,9 @@
+--- FAIL: TestLWMAMaxDifficultySteady (0.00s)
+    hardening_test.go:12: overflow: steady maximum became 1
+--- FAIL: TestVerifyZeroDifficulty (0.09s)
+    hardening_test.go:15: zero difficulty accepted
+--- FAIL: TestLWMASaturates (0.00s)
+    hardening_test.go:18: must saturate instead of wrapping: 1
+FAIL
+FAIL	github.com/noso-project/noso-go/v2/pow	0.094s
+FAIL
