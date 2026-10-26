@@ -18,6 +18,11 @@ type Store interface {
 	HeightOf(types.Hash) (uint64, bool)
 	// BlockAt fetches the block at the given height. (error if absent.)
 	BlockAt(uint64) (*types.Block, error)
+	// UndoAt returns complete spent outputs for a canonical block, as isolated copies.
+	UndoAt(uint64) ([]types.Output, error)
+	// ReplaceSuffix atomically replaces blocks after ancestor; failure preserves state.
+	// Like WriteBlock it checks raw consistency and requires prior Chain validation.
+	ReplaceSuffix(ancestor uint64, incoming []*types.Block) error
 	// BlockByHash fetches a block by its header hash.
 	BlockByHash(types.Hash) (*types.Block, error)
 	// HasUTXO reports whether the given commitment is currently unspent.

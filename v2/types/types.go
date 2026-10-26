@@ -96,7 +96,7 @@ const (
 	// as legacy balance UTXOs.
 	OutputFeaturesLegacyGVT OutputFeatures = 3
 	// OutputFeaturesDevFund marks the per-block transparent dev-fund output:
-	// a value-known commitment F·H + DevFundPoint where F is the block's total
+	// a value-known commitment F·H + DevFundPoint + t·G where F is the block's total
 	// kernel fee. At most one per block; only present when F > 0. See
 	// devfund.go and docs/v2/DEVFUND.md.
 	OutputFeaturesDevFund OutputFeatures = 4
@@ -189,7 +189,8 @@ const (
 	NetworkMagicMainnet uint32 = 0x4e4f5832 // "NOX2"
 	NetworkMagicTestnet uint32 = 0x4e4f5854 // "NOXT"
 
-	BlockVersion uint32 = 2
+	// Version 3 hard-forks the block-context dev-fund blinding rule.
+	BlockVersion uint32 = 3
 
 	// TargetBlockTime is the desired interval between blocks.
 	TargetBlockTimeSeconds int64 = 120

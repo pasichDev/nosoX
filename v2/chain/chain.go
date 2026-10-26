@@ -250,7 +250,7 @@ func (c *Chain) ReorgTo(incoming []*types.Block) error {
 	if tip.Height-ancestorHeight > 1024 {
 		return ErrTooDeep
 	}
-	// Reject malformed suffixes before copying any retained history.
+	// Reject malformed suffixes before reading history or staging rollback state.
 	parent := incoming[0].Header.PrevHash
 	height := ancestorHeight
 	for _, b := range incoming {
@@ -263,21 +263,14 @@ func (c *Chain) ReorgTo(incoming []*types.Block) error {
 		parent = types.HeaderID(&b.Header)
 		height++
 	}
-	// Validate against an isolated copy. No live or durable mutation occurs until
-	// every incoming block is validated and its accumulated work strictly wins.
-	staged := newMemStore()
-	for h := uint64(0); h <= ancestorHeight; h++ {
-		b, err := c.store.BlockAt(h)
-		if err != nil {
-			return err
-		}
-		if err = staged.WriteBlock(b); err != nil {
-			return err
-		}
+	// Overlay only the removed suffix; retained history is read lazily for validation.
+	staged, err := newForkStore(c.store, ancestorHeight)
+	if err != nil {
+		return err
 	}
 	candidate := &Chain{store: staged, checkpoints: c.checkpoints, now: c.now}
 	newWork, oldWork := new(big.Int), new(big.Int)
-	for h := ancestorHeight + 1; h <= tip.Height; h++ {
+	for h := tip.Height; h > ancestorHeight; h-- {
 		b, err := c.store.BlockAt(h)
 		if err != nil {
 			return err
@@ -296,7 +289,7 @@ func (c *Chain) ReorgTo(incoming []*types.Block) error {
 	if newWork.Cmp(oldWork) <= 0 {
 		return errors.New("chain: fork does not have strictly greater work")
 	}
-	return c.store.ReplaceChain(staged.blocks)
+	return c.store.ReplaceSuffix(ancestorHeight, incoming)
 }
 
 // blockWork is floor(2^256/(target+1)), using exactly the target accepted by PoW.
@@ -393,7 +386,8 @@ func (c *Chain) expectedDifficulty() uint64 {
 
 type memStore struct {
 	dir        string
-	blocks     []*types.Block
+	blocks     map[uint64]*types.Block
+	undo       map[uint64][]types.Output
 	heightOf   map[types.Hash]uint64
 	utxo       map[types.Commitment]types.Output
 	legacyIdx  map[string]types.Commitment
@@ -403,6 +397,8 @@ type memStore struct {
 
 func newMemStore() *memStore {
 	return &memStore{
+		blocks:     map[uint64]*types.Block{},
+		undo:       map[uint64][]types.Output{},
 		heightOf:   map[types.Hash]uint64{},
 		utxo:       map[types.Commitment]types.Output{},
 		legacyIdx:  map[string]types.Commitment{},
@@ -422,7 +418,7 @@ func (s *memStore) Tip() (types.BlockHeader, bool) {
 	if len(s.blocks) == 0 {
 		return types.BlockHeader{}, false
 	}
-	return s.blocks[len(s.blocks)-1].Header, true
+	return s.blocks[uint64(len(s.blocks)-1)].Header, true
 }
 
 func (s *memStore) HeightOf(h types.Hash) (uint64, bool) {
@@ -476,7 +472,7 @@ func (s *memStore) WriteBlock(b *types.Block) error {
 	if b.Header.Height != uint64(len(s.blocks)) {
 		return errors.New("store: noncontiguous height")
 	}
-	if len(s.blocks) > 0 && b.Header.PrevHash != types.HeaderID(&s.blocks[len(s.blocks)-1].Header) {
+	if len(s.blocks) > 0 && b.Header.PrevHash != types.HeaderID(&s.blocks[uint64(len(s.blocks)-1)].Header) {
 		return ErrStale
 	}
 	if len(s.blocks) == 0 && !b.Header.PrevHash.IsZero() {
@@ -485,7 +481,7 @@ func (s *memStore) WriteBlock(b *types.Block) error {
 	if _, ok := s.heightOf[types.HeaderID(&b.Header)]; ok {
 		return errors.New("store: block hash already exists")
 	}
-	_, err := checkStoreDelta(b, deltaReader{
+	spent, err := checkStoreDelta(b, deltaReader{
 		output: func(c types.Commitment) (*types.Output, bool, error) {
 			out, ok := s.UTXOByCommit(c)
 			return out, ok, nil
@@ -514,7 +510,8 @@ func (s *memStore) WriteBlock(b *types.Block) error {
 	for _, k := range b.Kernels {
 		s.kernelSeen[types.KernelID(&k)] = true
 	}
-	s.blocks = append(s.blocks, b)
+	s.blocks[b.Header.Height] = b
+	s.undo[b.Header.Height] = cloneOutputs(spent)
 	s.heightOf[types.HeaderID(&b.Header)] = b.Header.Height
 	return nil
 }
@@ -523,7 +520,7 @@ func (s *memStore) UndoBlock() error {
 	if len(s.blocks) <= 1 {
 		return errors.New("store: refuse to undo genesis")
 	}
-	return s.ReplaceChain(s.blocks[:len(s.blocks)-1])
+	return s.ReplaceSuffix(uint64(len(s.blocks)-2), nil)
 }
 
 func (s *memStore) ReplaceChain(blocks []*types.Block) error {
@@ -551,7 +548,8 @@ func (s *memStore) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := gob.NewEncoder(f).Encode(s.blocks); err != nil {
+	// Explicit snapshots intentionally traverse full history; reorgs never use Save.
+	if err := gob.NewEncoder(f).Encode(s.orderedBlocks()); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
 		return err

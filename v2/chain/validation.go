@@ -152,7 +152,7 @@ func (c *Chain) verifyHistory(store Store, genesis *types.Block) error {
 		}
 	}
 	if s, ok := store.(*BadgerStore); ok {
-		return s.verifyState(staged.blocks)
+		return s.verifyState(staged.orderedBlocks())
 	}
 	return nil
 }

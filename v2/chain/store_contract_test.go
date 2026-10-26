@@ -102,7 +102,7 @@ func TestSecurityStoreRejectsImpossibleDeltas(t *testing.T) {
 func rawBadgerEntries(t *testing.T, s *BadgerStore) map[string][]byte {
 	t.Helper()
 	entries := map[string][]byte{}
-	if err := s.db.View(func(txn *badger.Txn) error {
+	if err := s.view(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
 		for it.Rewind(); it.Valid(); it.Next() {
@@ -137,7 +137,7 @@ func TestSecurityStoreBadgerDecodeFailureUnchanged(t *testing.T) {
 			if field == "utxo" {
 				key = append([]byte{kUTXO}, commit[:]...)
 			}
-			if err := s.db.Update(func(txn *badger.Txn) error { return txn.Set(key, []byte("corrupt")) }); err != nil {
+			if err := s.mutate(func(txn *stageTxn) error { return txn.Set(key, []byte("corrupt")) }); err != nil {
 				t.Fatal(err)
 			}
 			before := rawBadgerEntries(t, s)

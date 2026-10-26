@@ -16,7 +16,6 @@ import (
 	"time"
 
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"github.com/dgraph-io/badger/v4"
 	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
 	"github.com/pasichDev/noso-go/v2/pow"
 	"github.com/pasichDev/noso-go/v2/types"
@@ -216,6 +215,9 @@ func (noHistoricalIndex) HasKernel(types.Hash) bool       { return false }
 type failReplace struct{ Store }
 
 func (f failReplace) ReplaceChain([]*types.Block) error { return errors.New("injected commit failure") }
+func (f failReplace) ReplaceSuffix(uint64, []*types.Block) error {
+	return errors.New("injected commit failure")
+}
 func TestSecurityReorgCommitFailureUnchanged(t *testing.T) {
 	c := NewMemory()
 	g := easyGenesisBlock(t)
@@ -524,7 +526,7 @@ func TestSecurityLegacyClaimFailsClosed(t *testing.T) {
 	})
 }
 
-func TestSecurityBadgerOversizeTransactionRollback(t *testing.T) {
+func TestSecurityBadgerOversizeTransactionAtomicPublication(t *testing.T) {
 	dir := t.TempDir()
 	c, err := NewBadger(dir)
 	if err != nil {
@@ -536,20 +538,36 @@ func TestSecurityBadgerOversizeTransactionRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := snapshot(t, c)
-	// Bypass consensus bounds deliberately to fault the backend itself after the
-	// transaction has already accumulated writes. Oversize must never split commits.
+	// Deliberately exceed one backend transaction. This is a persistence-only
+	// fixture; consensus-legal body parity has a separate regression.
 	b := mineEasy(types.HeaderID(&g.Header), 1)
 	b.Outputs = make([]types.Output, 40000)
 	for i := range b.Outputs {
 		binary.BigEndian.PutUint64(b.Outputs[i].Commit[1:9], uint64(i))
 		b.Outputs[i].RangeProof = make([]byte, 512)
 	}
-	if err := c.store.ReplaceChain([]*types.Block{g, b}); !errors.Is(err, badger.ErrTxnTooBig) {
-		t.Fatalf("expected actual Badger transaction-size failure, got %v", err)
+	s := c.store.(*BadgerStore)
+	injected := errors.New("injected before publication")
+	s.fault = func(phase string) error {
+		if phase == "before-publish" {
+			return injected
+		}
+		return nil
+	}
+	if err := s.ReplaceChain([]*types.Block{g, b}); !errors.Is(err, injected) {
+		t.Fatalf("expected injected failure: %v", err)
 	}
 	if !reflect.DeepEqual(before, snapshot(t, c)) {
-		t.Fatal("aborted backend transaction changed state")
+		t.Fatal("unpublished stage changed active state")
 	}
+	s.fault = nil
+	if err := s.ReplaceChain([]*types.Block{g, b}); err != nil {
+		t.Fatalf("large replacement: %v", err)
+	}
+	if tip, ok := s.Tip(); !ok || tip.Height != 1 {
+		t.Fatal("large replacement was not published")
+	}
+
 }
 
 func TestSecurityBadgerMissingTipFailsClosed(t *testing.T) {
@@ -564,7 +582,7 @@ func TestSecurityBadgerMissingTipFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := c.store.(*BadgerStore)
-	if err := s.db.Update(func(txn *badger.Txn) error { return txn.Delete([]byte{kTip}) }); err != nil {
+	if err := s.mutate(func(txn *stageTxn) error { return txn.Delete([]byte{kTip}) }); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.LoadOrInit(dir, g); err == nil {

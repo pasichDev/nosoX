@@ -13,12 +13,13 @@ import "encoding/hex"
 // Pedersen commitments use). A block's dev-fund output for fee total F is the
 // value-known commitment
 //
-//	C = F·H + P_dev
+//	C = F·H + P_dev + t·G
 //
 // which ANY validator can recompute and check from public data (F is the sum of
-// public kernel fees, P_dev is this constant) — so the fee destination is
-// immutable and fully auditable. Only the holder of the off-repo scalar r_dev
-// can spend it. This is the opposite of a hidden dev wallet.
+// public kernel fees, P_dev is this constant, and t is the canonical public
+// block-context tweak exposed by chain.DevFundBlindingTweak). The destination
+// is immutable and fully auditable. Only the holder of the off-repo scalar r_dev
+// can spend it using (r_dev+t) mod n. This is the opposite of a hidden dev wallet.
 const (
 	// DevFundPointHex is the 33-byte compressed secp256k1 point (hex) that
 	// receives transparent per-block network fees. Spending scalar is held

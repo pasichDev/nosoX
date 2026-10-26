@@ -18,7 +18,7 @@ var ErrBalance = errors.New("chain: block does not balance")
 //	Σ plain_outputs − Σ inputs + totalFee·H == Σ tx_kernel_excess
 //
 // Coinbase and dev-fund outputs are value-known and verified separately
-// (VerifyCoinbase over the subsidy, validateDevFund over F·H+DevFundPoint), so
+// (VerifyCoinbase over the subsidy, validateDevFund over F·H+DevFundPoint+t·G), so
 // they cancel out of this equation and are excluded here. Genesis (height 0) is
 // skipped: it mints value-known legacy/coinbase outputs with no spends.
 //
