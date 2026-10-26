@@ -1,0 +1,27 @@
+[
+  {
+    "name": "storage",
+    "command": [
+      "go",
+      "test",
+      "-p",
+      "2",
+      "./v2/chain",
+      "-run",
+      "^(TestSecurity|TestSP1|TestBadgerFence|TestBadgerLifecycle|TestBadgerRecovery|TestStreamingReplay|TestResource|TestLegacyClaimV4)",
+      "-count=1",
+      "-v"
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "go1.27.3",
+      "GOMODCACHE": "/home/pasich/go/pkg/mod",
+      "GOCACHE": "/home/pasich/.cache/go-build",
+      "GOPROXY": "off"
+    },
+    "started_utc": "2026-10-26T16:06:17.293610+00:00",
+    "elapsed_seconds": 101.611,
+    "exit_code": 1,
+    "log": "audit/logs/blockers-v4/verification-storage.log",
+    "log_sha256": "ae9762e41eceb1b7b9d356be10b297ac405157ccfbd7f9d70d91743996b5a512"
+  }
+]

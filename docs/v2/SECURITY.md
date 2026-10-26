@@ -18,3 +18,9 @@ The hardened daemon defaults to loopback RPC/P2P, testnet, no HTTPS seed discove
 and refuses mainnet mode. Non-loopback RPC requires a token. Public read methods
 remain an explicit allow-list. TLS, network isolation and host permissions remain
 operator responsibilities; authentication does not establish consensus safety.
+
+Version4 technical remediation and residual High gates are summarized in
+[BLOCKERS_V4.md](../../audit/BLOCKERS_V4.md). Legacy signatures authorize only
+explicitly trusted allocations; they do not authenticate historical supply.
+Reader-safe reclamation and explicit consensus limits do not guarantee bounded
+disk growth under permanent I/O failures or universal whole-process RSS.

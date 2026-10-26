@@ -2,8 +2,8 @@
 
 **RESEARCH ONLY — MAINNET BLOCKED. Not independently audited.**
 Baseline6179eb56d53768a19950f07e9c806fd384572c5d, initially clean main;
-work preserved on security/consensus-hardening. Current-source line ranges below
-refer to this branch; original vulnerable behavior refers to the baseline SHA.
+work preserved on security/consensus-hardening. Original line ranges describe
+the revision when recorded; version4 file/function mapping is in BLOCKERS_V4.md; original vulnerable behavior refers to the baseline SHA.
 Tests are evidence of selected invariants, never proof of absence of defects.
 
 Scope/trust/inventory: THREAT_MODEL.md and BASELINE_TREE.tsv. Exact test commands,
@@ -39,14 +39,14 @@ unresolved. No operational exploit or public-network test was required.
 ## NX-003: Legacy claims had no verifiable ownership boundary
 
 - Severity: **Critical**. Classification: CWE-862.
-- Affected current source: `v2/chain/validation.go:182-317` (`func (c *Chain) validateBody`).
+- Affected current source: `v2/chain/validation.go:182-317` (`func (c *Chain) validateBody`); version4 also `v2/chain/legacy_claim.go:14-85`.
 - Root cause: Legacy commitments use publicly derivable blindings; input existence and balance do not authenticate historical owner.
 - Threat model / impact: Any party knowing public snapshot data could construct a claim unless historical authorization is separately verified.
 - Evidence: Baseline validation has no legacy signature verification; claim format lacks supplied historical key and reviewed context binding.
 - Confidence: high in stated code behavior; unverified assurance explicitly noted.
-- Fix / disposition: Reject all Legacy/LegacyGVT spends and legacy-claim kernels; do not invent address-to-public-key recovery.
-- Regression evidence: TestSecurityLegacyClaimFailsClosed
-- Verification status: Fail-closed mitigation verified. Legitimate migration remains unavailable and release-blocking. Final executed status is recorded in TEST_REPORT.md.
+- Fix / disposition: Initially reject all claims; version4 implements canonical historical key-text ownership via strict DER low-S ECDSA-SHA256 bound to trusted source/network/genesis/destination, exact claim legs and native Schnorr/proof/conservation. No address-to-key recovery. See legacy-ownership-procedure.md.
+- Regression evidence: TestSecurityLegacyClaimFailsClosed (missing authorization remains rejected); TestLegacyClaimV4BothBackends and TestLegacyClaimV4DurableRestart (positive trusted claims plus full-entry negative/context/replay/reorg controls).
+- Verification status: Version4 technical authorization implemented for operator-trusted genesis. Historical migration authenticity remains High/blocking; exact integrated verification is in BLOCKERS_V4.md and TEST_REPORT.md.
 
 ## NX-004: Shape-only legacy range proof accepted
 
@@ -248,7 +248,7 @@ unresolved. No operational exploit or public-network test was required.
 - Threat model / impact: An unverified allocation manifest could permanently legitimize corrupted balances.
 - Evidence: 4956 records/3561 positive;11 invalid addresses;400NOSO discrepancy against repository simple formula. Original fixture remains unchanged.
 - Confidence: high in stated code behavior; unverified assurance explicitly noted.
-- Fix / disposition: Reject invalid/duplicate/negative snapshots and missing requested files, preserve evidence, disable mainnet and legacy claims. Require independent reconciliation.
+- Fix / disposition: Reject invalid/duplicate/negative snapshots and missing requested files, preserve evidence, disable mainnet; version4 permits only explicitly authorized trusted-genesis claims. Require independent economic reconciliation.
 - Regression evidence: TestRejectOriginalMalformedSnapshot; TestRejectNegativeAndDuplicateSnapshot; TestDefaultTimestampPreservesSnapshotAndNetwork
 - Verification status: UNRESOLVED HIGH migration trust; parser hardening verified separately. Final executed status is recorded in TEST_REPORT.md.
 
@@ -290,3 +290,55 @@ unresolved. No operational exploit or public-network test was required.
 Current SP1/SP2/SP3 disposition is superseded by SP123_COMPLETION.md and the design/review records. Baseline descriptions and earlier verification notes remain evidence. No known Critical/High risk is silently declared closed. Open blockers require
 protocol/cryptographic/storage work beyond the tested patches. See strict release
 gates before any deployment or final external release audit.
+
+## NX-022: MVCC lifecycle and failed-retry key retention — version4 remediation
+
+- Severity: **High operational/resource risk**. CWE-400.
+- Affected current source: `v2/chain/badger_store.go:77-202,784-934`.
+- Root cause: Discard cutoff zero prevented obsolete committed versions from
+  being reclaimed; failed different candidates could expand dirty key identity
+  metadata, and recovery visited all unpublished versions.
+- Threat model/impact: Long-lived local nodes and failed local persistence could
+  retain unnecessary versions/metadata and consume memory/disk; failed writes
+  must never become active merely because a later fence advances.
+- Evidence/confidence: Source-visible retained cutoff/dirty lifecycle; deterministic
+  reader, compaction, retry and reopen regressions. High confidence in the
+  concrete boundary fix; physical failure-loop disk bounds remain unproven.
+- Fix: Reader pins and safe cutoff, one bounded maintenance attempt, standalone
+  same-state restoration, at most65536 recovery keys and skip older same-key
+  versions. Persistent replay now uses a disk-backed streaming verifier
+  (`replay_verify.go:17-157`) instead of a whole-history Go map.
+- Regression: TestBadgerLifecycle*, TestBadgerRecovery*, TestStreamingReplay*,
+  existing staged-write/abrupt-exit tests and TestMaintenance*.
+- Verification: Final exact commands/results in logs/blockers-v4-final/ and
+  TEST_REPORT.md. No universal disk quota, hardware-power-loss or positive
+  value-log rewrite guarantee is claimed. See lifecycle/second-pass reports.
+
+## NX-023: Legal suffix/undo resource envelope was impractical — version4 remediation
+
+- Severity: **High operational/resource risk**. CWE-400 / CWE-770.
+- Affected current source: `v2/chain/resource_budget.go:12-103`,
+  `suffix_overlay.go` undo staging, `badger_store.go:578-606`,
+  `types/protocol_limits.go`, pool/miner/P2P admission.
+- Root cause:10000-input bodies allowed extremely large spent-proof undo records,
+  and1024 old8MiB bodies alone allowed8GiB before state/serialization overhead.
+- Threat model/impact: Consensus-legal shapes could exhaust realistic node RAM,
+  independently of suffix-only staging and atomic persistence correctness.
+- Evidence/confidence: Explicit payload equations and deterministic boundary/
+  storage tests; no assertion of a forged valid proof or operational exploit.
+  High confidence in structural bound; full-process capacity remains limited.
+- Fix: Explicit version4 native4/4/4,64KiB body,14529-byte proof limits; checked
+  undo before clone/decode; candidate admission reserves required outputs;
+  network/pool account new claim fields. Economics and1024 depth unchanged.
+- Regression: TestResource* including real four-input AddBlock pipeline, raw
+  maximum-shape backend parity and opt-in1024-block memory/Badger transitions;
+  TestCandidateReservesMandatoryV4Outputs, TestDecoderV4NativeEnvelope,
+  TestPoolV4ClaimBudgetAndRemoval.
+- Verification: Final logs/blockers-v4-final/; raw maximum fixtures contain
+  synthetic invalid proofs and do not bypass consensus. At-least2GiB remains
+  an experimental target, not a universal RSS ceiling or a validated maximum
+  cryptographic fork latency. Capacity/durability release gates remain explicit.
+
+Version4 follow-up does not close NX-018/NX-019/NX-020. Historical observations
+and earlier test runs are preserved; BLOCKERS_V4.md describes current scope,
+protocol decisions, executed evidence and next safe development steps.

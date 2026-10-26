@@ -1,0 +1,35 @@
+{
+  "archive_bytes": 2684282134,
+  "archive_files": 180032,
+  "archive_range": [
+    0,
+    180031
+  ],
+  "elapsed_seconds": 4.261,
+  "files_with_untyped_trail": 171607,
+  "header_fee_sum": 361337942285,
+  "header_number_mismatch": [],
+  "header_reward_sum": 901185390730000,
+  "limitations": [
+    "header inventory only; no transaction signature or MD5 link verification",
+    "no economic replay, snapshot reconciliation or archive provenance authentication",
+    "local files assumed stable during diagnostic; PoS/MN tails remain untyped"
+  ],
+  "missing": [],
+  "negative_fee": [],
+  "negative_order_count": [],
+  "negative_reward": [],
+  "orders": 1424238,
+  "reward_counts": {
+    "5000000000": 180031,
+    "1030390730000": 1
+  },
+  "scanned_files": 180032,
+  "scanned_range": [
+    0,
+    180031
+  ],
+  "script_sha256": "b40eb39340ac0858a4535bff95f13225b103ab20eb57f3882d687af6dbfa227d",
+  "truncated": [],
+  "untyped_trail_bytes": 1817608602
+}

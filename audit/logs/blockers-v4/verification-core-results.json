@@ -1,0 +1,122 @@
+[
+  {
+    "name": "version",
+    "command": [
+      "go",
+      "version"
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "go1.27.3",
+      "GOMODCACHE": "/home/pasich/go/pkg/mod",
+      "GOCACHE": "/home/pasich/.cache/go-build",
+      "GOPROXY": "off"
+    },
+    "started_utc": "2026-10-26T16:06:14.920610+00:00",
+    "elapsed_seconds": 0.008,
+    "exit_code": 0,
+    "log": "audit/logs/blockers-v4/verification-version.log",
+    "log_sha256": "5707bf75dd54b4fdd5ac209444d48c9c4179ebf8510f80e2f7293dfbedc1012b"
+  },
+  {
+    "name": "format",
+    "command": [
+      "go",
+      "fmt",
+      "./..."
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "go1.27.3",
+      "GOMODCACHE": "/home/pasich/go/pkg/mod",
+      "GOCACHE": "/home/pasich/.cache/go-build",
+      "GOPROXY": "off"
+    },
+    "started_utc": "2026-10-26T16:06:14.929428+00:00",
+    "elapsed_seconds": 0.132,
+    "exit_code": 0,
+    "log": "audit/logs/blockers-v4/verification-format.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "build",
+    "command": [
+      "go",
+      "build",
+      "-p",
+      "2",
+      "./..."
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "go1.27.3",
+      "GOMODCACHE": "/home/pasich/go/pkg/mod",
+      "GOCACHE": "/home/pasich/.cache/go-build",
+      "GOPROXY": "off"
+    },
+    "started_utc": "2026-10-26T16:06:15.061680+00:00",
+    "elapsed_seconds": 2.306,
+    "exit_code": 0,
+    "log": "audit/logs/blockers-v4/verification-build.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "vet",
+    "command": [
+      "go",
+      "vet",
+      "-p",
+      "2",
+      "./..."
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "go1.27.3",
+      "GOMODCACHE": "/home/pasich/go/pkg/mod",
+      "GOCACHE": "/home/pasich/.cache/go-build",
+      "GOPROXY": "off"
+    },
+    "started_utc": "2026-10-26T16:06:17.368604+00:00",
+    "elapsed_seconds": 0.81,
+    "exit_code": 0,
+    "log": "audit/logs/blockers-v4/verification-vet.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "modverify",
+    "command": [
+      "go",
+      "mod",
+      "verify"
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "go1.27.3",
+      "GOMODCACHE": "/home/pasich/go/pkg/mod",
+      "GOCACHE": "/home/pasich/.cache/go-build",
+      "GOPROXY": "off"
+    },
+    "started_utc": "2026-10-26T16:06:18.178810+00:00",
+    "elapsed_seconds": 0.516,
+    "exit_code": 0,
+    "log": "audit/logs/blockers-v4/verification-modverify.log",
+    "log_sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd"
+  },
+  {
+    "name": "regression",
+    "command": [
+      "go",
+      "test",
+      "-p",
+      "2",
+      "./...",
+      "-count=1"
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "go1.27.3",
+      "GOMODCACHE": "/home/pasich/go/pkg/mod",
+      "GOCACHE": "/home/pasich/.cache/go-build",
+      "GOPROXY": "off"
+    },
+    "started_utc": "2026-10-26T16:06:18.695513+00:00",
+    "elapsed_seconds": 129.005,
+    "exit_code": 1,
+    "log": "audit/logs/blockers-v4/verification-regression.log",
+    "log_sha256": "c5ea0e21d55319ff1a69f957ca35bc93980f4c2c853195966eec285c31b3d747"
+  }
+]

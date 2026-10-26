@@ -234,3 +234,13 @@ in SP123_COMPLETION.md. SP123_SECOND_PASS.md records a new independent internal
 review of the combined suffix/fence implementation. The original SP1/SP2/SP3
 observations above remain historical evidence, not the latest code disposition.
 No publication or deployment occurred.
+
+## Version4 follow-up
+
+The later user-authorized blocker remediation is recorded in BLOCKERS_V4.md.
+SP1 context-bound fee outputs, SP2 suffix-only staging and SP3 fenced persistence
+remain in force, with new native resource limits, safe MVCC lifecycle and
+streaming startup verification. REMAINING_BLOCKERS_SECOND_PASS.md records a
+separate scoped internal review of these fixes and the legacy claim integration.
+External crypto/economic evidence and remaining capacity/durability gates are
+still explicit; the earlier independent internal findings above remain intact.

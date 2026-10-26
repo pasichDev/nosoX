@@ -3,8 +3,9 @@
 > **RESEARCH ONLY. MAINNET BLOCKED. Not independently audited.**
 > This branch contains defensive hardening of an archived prototype. Passing
 > tests do not establish cryptographic soundness or monetary legitimacy.
-> Legacy claims are disabled. Custom cryptography, legacy migration and
-> storage lifecycle/resource assurance remain release blockers. Do not hold value,
+> Version4 claims require explicit key ownership and a trusted genesis.
+> Independent cryptographic review, historical migration trust and remaining
+> durability/capacity assurance still block release. Do not hold value,
 > expose this software publicly, or connect it to a public cryptocurrency network.
 
 The Go module is `github.com/pasichDev/noso-go`, aligned with the repository
@@ -20,6 +21,11 @@ SP-1/2/3 follow-up implementation and exact current results are in
 [audit/SP123_COMPLETION.md](audit/SP123_COMPLETION.md). It adds context-bound fee
 outputs, suffix-only state staging and durable MVCC publication fences. This
 does not establish independent cryptographic or production resource assurance.
+
+The latest follow-up is [version4 blocker remediation](audit/BLOCKERS_V4.md).
+MVCC reader tracking permits safe reclamation; persistent startup replay streams
+through a disk-backed verifier. These address concrete defects, without proving
+a universal RAM/disk bound or authenticating historical allocations.
 
 The current internal assessment and exact evidence are in:
 
@@ -55,8 +61,9 @@ go test ./v2/p2p -run 'TestThreeNode|TestPreAdmittedNativeTransactionGossips' -c
 
 ## Compatibility and migration
 
-Version **3** adds context-bound fee commitments and a new atomic storage schema
-to the earlier header/body-binding changes. Old unfenced databases and earlier
+Version **4** adds destination-bound legacy ownership and explicit native block
+limits (4 inputs, 4 outputs, 4 kernels, 64 KiB structural body), retaining the
+version3 context-bound fee commitments and atomic storage schema. Old unfenced databases and earlier
 protocol histories are rejected. Create a
 new disposable local data directory; there is no trusted automatic upgrade.
 No reward, allocation, fee destination or GVT value constant was changed.

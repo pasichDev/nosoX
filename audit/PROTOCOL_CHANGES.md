@@ -81,3 +81,35 @@ above remains historical. See SP123_DESIGN.md and SP123_COMPLETION.md.
   scan cost, large-delta RAM budgets and hardware power-loss behavior remain
   explicit operational limits. Removing the single-transaction cap is not a
   claim of unlimited storage or production resource assurance.
+
+## Version4 revision (base1f4b2d2)
+
+- Native blocks are limited to4 inputs,4 outputs,4 kernels,64KiB charged body
+  and14529-byte proofs. Depth remains1024; aggregate bodies fit64MiB. Undo is
+  checked before allocation/decoding. Trusted local genesis retains its original
+  10000-record/8MiB allocation envelope and cannot be a candidate reorg block.
+  Remote blocks/transactions use the native envelope. These are explicit
+  consensus changes, not smaller undocumented node-local fork limits.
+- Input encoding appends length-delimited LegacyPubKey followed by32-byte
+  LegacyOutputID and32-byte LegacyKernelID. The two IDs add64bytes/input to
+  resource charge; public-key text is capped88bytes. Body roots use domains
+  NosoX/block/outputs/v4\0 and NosoX/block/inputs-kernels/v4\0; transactions
+  use NosoX/transaction/v4\0. KernelID and OutputID keep their previous format.
+- Legacy spends require the new context-bound SHA256 ECDSA procedure, exact
+  one-to-one output/kernel leg, native proof and Schnorr verification and
+  individual/global conservation. See legacy-ownership-procedure.md for exact
+  bytes. Historical SHA1 signatures and context-free builder APIs are rejected.
+  Regular-key GVT redemption is experimental; GVT identity transfer is unsupported.
+- Version3 fee tweak, scheduled subsidy, premine, all allocation/value/recipient
+  constants and1024-depth policy are preserved. No economics decision was
+  silently made. Original malformed fixture bytes are unchanged and rejected.
+- Reader-safe MVCC reclamation and streaming scratch replay change storage
+  lifecycle, not authorized value. Recovery fails closed above65536 future keys.
+  Interrupted trusted bulk imports above that size and pre-v4 abandoned state
+  can require offline recovery. Prior histories/DBs require explicit disposable
+  reset/import, never silent acceptance under revised rules.
+
+Version4 is a research hard fork, not a live-network migration proposal. Mainnet
+startup remains disabled; independent crypto and historical economic approval
+are required before any trusted release. Full current results: BLOCKERS_V4.md
+and TEST_REPORT.md.

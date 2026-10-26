@@ -92,3 +92,35 @@ trusted import and explicit memory Save still inspect history. Bounded protocol
 suffixes may still be large, and retained MVCC versions/recovery scans lack an
 independently verified lifecycle budget. These limits, cryptographic assurance,
 legacy trust and actual device durability remain release gates.
+
+## Version4 implemented boundaries and explicit assumptions
+
+The earlier all-claims-disabled description is historical. `validateLegacyClaims`
+now loads trusted active state plus canonical genesis/network, verifies strict
+DER low-S ECDSA-SHA256 for the exact source/destination leg, checks individual
+commitment difference and Schnorr, and consumes the source atomically. Shared
+legs, unreferenced kernels and legacy metadata on native inputs fail closed.
+`TestLegacyClaimV4BothBackends` and durable restart cover accepted synthetic
+trusted claims and negative/context/replay/reorg cases. This provides ownership
+conditional on the trust anchor; it does not prove historical issuance.
+
+Version4 native bounds are4 inputs/4 outputs/4 kernels,64KiB structural body,
+14529-byte proof ceiling and1024 reorg depth. Every legal native suffix fits the
+64MiB aggregate body budget. Undo checks occur before clone/decode. Chain,
+network decoder and pool charge the two claim IDs and public-key text; admission
+and miner reserve mandatory subsidy/fee slots. Exact-bound/+1, real four-input
+native payments and raw1024-block storage tests are separate evidence.
+
+Badger snapshot registration is atomic with fence observation/publication.
+Discard is the minimum active/pinned reader timestamp. Failed stages restore
+same-state keys before a different candidate is staged; recovery skips older
+same-key versions and fails unchanged above65536 keys. Persistent replay uses
+one block/record at a time in a disposable bounded-cache disk-backed store.
+Lifecycle, actual LSM compaction, failed retry, abrupt exit, recovery boundary,
+state corruption and scratch cleanup tests support these specific invariants.
+O(history) scratch disk/time, pinned-reader retention and persistent fault disk
+growth remain explicit limits, not violations hidden by claiming constant space.
+
+See BLOCKERS_V4.md for file/function/test mapping and final executed logs. Native
+no-inflation remains conditional on custom cryptographic soundness and trusted
+genesis; independent crypto and historical supply reconciliation remain blocked.

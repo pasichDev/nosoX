@@ -1,0 +1,25 @@
+[
+  {
+    "name": "race",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-p",
+      "2",
+      "./...",
+      "-count=1"
+    ],
+    "environment": {
+      "GOTOOLCHAIN": "go1.27.3",
+      "GOMODCACHE": "/home/pasich/go/pkg/mod",
+      "GOCACHE": "/home/pasich/.cache/go-build",
+      "GOPROXY": "off"
+    },
+    "started_utc": "2026-10-26T16:06:16.111656+00:00",
+    "elapsed_seconds": 350.911,
+    "exit_code": 1,
+    "log": "audit/logs/blockers-v4/verification-race.log",
+    "log_sha256": "2a60241199cc451ccb60a1bff5dc436a12923733d57e18d75c22c1160b63c4b8"
+  }
+]

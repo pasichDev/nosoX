@@ -154,3 +154,26 @@ audit/logs/govulncheck.log preserves the scanner's trailing space. Raw evidence
 was intentionally not rewritten. The same check with
 `-- . ':!audit/logs'` returned0 for source, tests and documentation. These are
 log-format diagnostics, not passing code checks or new security findings.
+
+## Version4 blocker remediation — final executed results
+
+Full exact commands, environments, elapsed timings, preserved failures and
+limitations: [VERIFICATION_V4_SUMMARY.md](VERIFICATION_V4_SUMMARY.md).
+Source: BLOCKERS_V4_SOURCE.sha256; raw logs and hash-checked result JSON:
+logs/blockers-v4-final/. Initial failed integration logs are preserved separately
+in logs/blockers-v4/ (stale resource-test expectation; no crypto rule weakened).
+
+- Go1.27.3; fmt/build/vet/modverify exit0, format log empty.
+- `go test -p 2 ./... -count=1`: exit0,118.666s wall,18 packages with tests.
+- `go test -race -p 2 ./... -count=1`: exit0,294.124s wall,18 packages with tests.
+- Combined selected consensus/storage/lifecycle/resource/claim suite: exit0,
+  95.616s wall;48 passing top-level tests/191 including subtests.
+- Opt-in1024-block synthetic raw storage suffix: memory exit0 (0.41s test,
+  peak380748KiB), Badger exit0 (6.09s test, peak810512KiB), zero swaps.
+  Proof bytes are synthetic invalid data and only raw Store capacity is claimed.
+- Local archive header diagnostic: exit0,4.261s; not an economic/ownership replay.
+
+Source fixes and their invariants: BLOCKERS_V4.md. Independent crypto,
+side-channel and historical supply authenticity remain High blockers.
+No fresh coverage, fuzz campaign, external scanner or public network result is
+claimed by this follow-up; previous evidence is preserved with its limitations.
