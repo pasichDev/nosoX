@@ -11,18 +11,26 @@ permissions:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      - name: verify modules
+        run: go mod verify
       - name: go vet
-        run: go vet ./...
+        run: go vet -p 2 ./...
       - name: build
-        run: go build ./...
-      - name: test (race + coverage)
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: go build -p 2 ./...
+      # Keep race detection and coverage as separate runs. Their combined
+      # instrumentation increases peak memory and differs from the audited,
+      # passing local race command.
+      - name: race tests
+        run: go test -race -p 2 ./... -count=1
+      - name: coverage tests
+        run: go test -p 2 -coverprofile=coverage.out ./... -count=1
       - name: coverage summary
         run: go tool cover -func=coverage.out | tail -1
       - name: upload coverage
