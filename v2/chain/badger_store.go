@@ -338,9 +338,12 @@ func (s *BadgerStore) HasUTXO(commit types.Commitment) bool {
 	return err == nil
 }
 
+// hasSeen is used to enforce consensus history uniqueness. Only an explicit
+// missing-key result means an identity is unused; every other storage error
+// must reject admission rather than silently allowing an output/kernel replay.
 func (s *BadgerStore) hasSeen(prefix byte, id []byte) bool {
 	err := s.view(func(txn *badger.Txn) error { _, err := txn.Get(append([]byte{prefix}, id...)); return err })
-	return err == nil
+	return !errors.Is(err, badger.ErrKeyNotFound)
 }
 func (s *BadgerStore) HasOutput(c types.Commitment) bool { return s.hasSeen(kOutputSeen, c[:]) }
 func (s *BadgerStore) HasKernel(h types.Hash) bool       { return s.hasSeen(kKernelSeen, h[:]) }
