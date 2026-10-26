@@ -5,10 +5,10 @@ import (
 	"encoding/gob"
 	"testing"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
-// FuzzBlockDecode feeds arbitrary bytes to the gob block decoder. A
+// FuzzBlockDecode feeds arbitrary bytes to the bounded JSON block decoder. A
 // successful crash here means a malicious peer can DoS gossipsub
 // consumers by sending malformed payloads.
 func FuzzBlockDecode(f *testing.F) {
@@ -16,7 +16,10 @@ func FuzzBlockDecode(f *testing.F) {
 	good := &types.Block{Header: types.BlockHeader{Height: 1, Nonce: 7}}
 	var buf bytes.Buffer
 	_ = gob.NewEncoder(&buf).Encode(good)
+	// Preserve the historical gob fixture as a rejected migration seed.
 	f.Add(buf.Bytes())
+	valid, _ := encodeBlockMsg(good)
+	f.Add(valid)
 	f.Add([]byte{0xff, 0x00, 0x01})
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, raw []byte) {
@@ -29,7 +32,10 @@ func FuzzTxDecode(f *testing.F) {
 	good := &types.Transaction{}
 	var buf bytes.Buffer
 	_ = gob.NewEncoder(&buf).Encode(good)
+	// Preserve the historical gob fixture as a rejected migration seed.
 	f.Add(buf.Bytes())
+	valid, _ := encodeTxMsg(good)
+	f.Add(valid)
 	f.Add([]byte{0xfe})
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		_, _ = decodeTxMsg(raw)

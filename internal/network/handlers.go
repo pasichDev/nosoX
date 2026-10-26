@@ -3,9 +3,9 @@ package network
 import (
 	"archive/zip"
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -13,9 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noso-project/noso-go/internal/blockchain"
-	"github.com/noso-project/noso-go/internal/storage"
-	"github.com/noso-project/noso-go/internal/types"
+	"github.com/pasichDev/noso-go/internal/blockchain"
+	"github.com/pasichDev/noso-go/internal/crypto"
+	"github.com/pasichDev/noso-go/internal/storage"
+	"github.com/pasichDev/noso-go/internal/types"
 )
 
 // Service bundles everything a TCP handler needs to answer NosoDart
@@ -25,14 +26,14 @@ type Service struct {
 	Summary       *storage.SummaryStore
 	Headers       *storage.HeadersStore
 	GVTs          []types.GVT
-	CFGRaw        string         // verbatim nosocfg.psk contents
-	SummaryFile   string         // path to sumary.psk on disk
-	GVTsFile      string         // path to gvts.psk on disk
-	Version       string         // e.g. "0.5.0"
-	ProtoVersion  string         // PSK protocol version, e.g. "2"
-	ListenAddress string         // ip:port string for advertising in NODESTATUS
-	StartTime     time.Time      // for uptime reporting
-	Pending       *PendingPool   // optional, may be nil
+	CFGRaw        string       // verbatim nosocfg.psk contents
+	SummaryFile   string       // path to sumary.psk on disk
+	GVTsFile      string       // path to gvts.psk on disk
+	Version       string       // e.g. "0.5.0"
+	ProtoVersion  string       // PSK protocol version, e.g. "2"
+	ListenAddress string       // ip:port string for advertising in NODESTATUS
+	StartTime     time.Time    // for uptime reporting
+	Pending       *PendingPool // optional, may be nil
 }
 
 // PendingPool is a tiny thread-safe transaction pool. Lives in the network
@@ -50,6 +51,9 @@ func NewPendingPool() *PendingPool { return &PendingPool{} }
 func (p *PendingPool) Add(o types.Order) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if len(p.entries) >= 2048 {
+		return false
+	}
 	for i := range p.entries {
 		if p.entries[i].TrfrID == o.TrfrID {
 			return false
@@ -128,21 +132,21 @@ func (svc *Service) handleNodeStatus(ctx context.Context, w *bufio.Writer, cmd s
 		pending = svc.Pending.Len()
 	}
 	fields := []string{
-		"NOSODATA",                              // 0
-		"0",                                     // 1 connections
-		strconv.FormatInt(lastBlock, 10),        // 2 lastblock
-		strconv.Itoa(pending),                   // 3 pendings
-		"0",                                     // 4 delta
-		"archive",                               // 5 branch
-		svc.Version,                             // 6 version
+		"NOSODATA",                               // 0
+		"0",                                      // 1 connections
+		strconv.FormatInt(lastBlock, 10),         // 2 lastblock
+		strconv.Itoa(pending),                    // 3 pendings
+		"0",                                      // 4 delta
+		"archive",                                // 5 branch
+		svc.Version,                              // 6 version
 		strconv.FormatInt(time.Now().Unix(), 10), // 7 utc time
-		"8080",                                  // 8 listen port placeholder
-		"0",                                     // 9
-		lastBlockHash,                           // 10 lastblockhash[:5]
-		"null", "0", "0", "0",                   // 11..14 padding
-		headersHash,                             // 15 headers[:5]
-		"0",                                     // 16
-		sumHash,                                 // 17 sumaryhash[:5]
+		"8080",                                   // 8 listen port placeholder
+		"0",                                      // 9
+		lastBlockHash,                            // 10 lastblockhash[:5]
+		"null", "0", "0", "0",                    // 11..14 padding
+		headersHash, // 15 headers[:5]
+		"0",         // 16
+		sumHash,     // 17 sumaryhash[:5]
 	}
 	_, err := fmt.Fprintln(w, strings.Join(fields, " "))
 	return err
@@ -214,25 +218,23 @@ func (svc *Service) handlePendingFull(ctx context.Context, w *bufio.Writer, cmd 
 // from there, so prefixing extra bytes is allowed; we emit ZIP bytes
 // directly with no prefix.
 func (svc *Service) handleZipSummary(ctx context.Context, w *bufio.Writer, cmd string, args []string) error {
-	body, err := os.ReadFile(svc.SummaryFile)
+	body, err := os.Open(svc.SummaryFile)
 	if err != nil {
 		return err
 	}
-	var zbuf bytes.Buffer
-	zw := zip.NewWriter(&zbuf)
+	defer body.Close()
+	zw := zip.NewWriter(w)
 	f, err := zw.Create("sumary.psk")
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(body); err != nil {
+	if _, err := io.Copy(f, body); err != nil {
 		return err
 	}
 	if err := zw.Close(); err != nil {
 		return err
 	}
-	if _, err := w.Write(zbuf.Bytes()); err != nil {
-		return err
-	}
+
 	// NosoDart reads until EOF on this connection for binary streams,
 	// so we flush and close after the write.
 	return w.Flush()
@@ -249,14 +251,15 @@ func (svc *Service) handleCFG(ctx context.Context, w *bufio.Writer, cmd string, 
 // `data_parser.dart:264-287`. The 20-byte prefix is a Pascal-side ZIP
 // header artifact; we keep parity by prepending 20 zero bytes.
 func (svc *Service) handleGVTBinary(ctx context.Context, w *bufio.Writer, cmd string, args []string) error {
-	body, err := os.ReadFile(svc.GVTsFile)
+	body, err := os.Open(svc.GVTsFile)
 	if err != nil {
 		return err
 	}
+	defer body.Close()
 	if _, err := w.Write(make([]byte, 20)); err != nil {
 		return err
 	}
-	if _, err := w.Write(body); err != nil {
+	if _, err := io.Copy(w, body); err != nil {
 		return err
 	}
 	return w.Flush()
@@ -285,12 +288,18 @@ func (svc *Service) handleSubmitOrder(ctx context.Context, w *bufio.Writer, cmd 
 		_, _ = fmt.Fprintf(w, "ERROR %v\n", err)
 		return nil
 	}
+	owner, ownerErr := crypto.AddressFromPublicKey(o.Sender, crypto.AddressTypeRegular)
+	if ownerErr != nil || owner != o.Address {
+		_, _ = fmt.Fprintln(w, "ERROR sender does not own address")
+		return nil
+	}
 	if !blockchain.VerifyOrder(o) {
 		_, _ = fmt.Fprintln(w, "ERROR signature invalid")
 		return nil
 	}
 	if svc.Pending == nil {
-		svc.Pending = NewPendingPool()
+		_, _ = fmt.Fprintln(w, "ERROR pending pool unavailable")
+		return nil
 	}
 	if !svc.Pending.Add(*o) {
 		_, _ = fmt.Fprintln(w, "DUPLICATE")
@@ -344,14 +353,17 @@ func parseOrderLine(args []string) (*types.Order, error) {
 	}
 	// Now expect exactly 13 fields: orderID orderLines orderType timestamp
 	// reference trxLine sender address receiver fee amount signature trfrID.
-	if len(args) < 13 {
-		return nil, fmt.Errorf("network: order line has %d fields, want >= 13", len(args))
+	if len(args) != 13 {
+		return nil, fmt.Errorf("network: order line has %d fields, want 13", len(args))
 	}
 	o := &types.Order{}
 	o.OrderID = args[0]
-	n, err := strconv.Atoi(args[1])
+	n, err := strconv.ParseInt(args[1], 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("orderLines: %w", err)
+	}
+	if n < 1 || n > 1024 {
+		return nil, fmt.Errorf("orderLines out of bounds")
 	}
 	o.OrderLines = int32(n)
 	o.OrderType = args[2]
@@ -361,9 +373,12 @@ func parseOrderLine(args []string) (*types.Order, error) {
 	}
 	o.TimeStamp = ts
 	o.Reference = args[4]
-	tl, err := strconv.Atoi(args[5])
+	tl, err := strconv.ParseInt(args[5], 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("trxLine: %w", err)
+	}
+	if tl < 1 || tl > n {
+		return nil, fmt.Errorf("trxLine out of bounds")
 	}
 	o.TrxLine = int32(tl)
 	o.Sender = args[6]
@@ -378,6 +393,12 @@ func parseOrderLine(args []string) (*types.Order, error) {
 		o.AmmountTrf = amt
 	} else {
 		return nil, fmt.Errorf("amount: %w", err)
+	}
+	if o.AmmountFee < 0 || o.AmmountTrf < 0 || o.TimeStamp < 0 || !isKnownOrderType(o.OrderType) {
+		return nil, fmt.Errorf("invalid order fields")
+	}
+	if o.OrderType == types.OrderTypeTransfer && o.AmmountTrf == 0 {
+		return nil, fmt.Errorf("zero transfer")
 	}
 	o.Signature = args[11]
 	o.TrfrID = args[12]

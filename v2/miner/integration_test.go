@@ -6,26 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noso-project/noso-go/v2/chain"
-	"github.com/noso-project/noso-go/v2/genesis"
-	"github.com/noso-project/noso-go/v2/mempool"
-	"github.com/noso-project/noso-go/v2/pow"
-	"github.com/noso-project/noso-go/v2/types"
-	"github.com/noso-project/noso-go/v2/wallet"
+	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/noso-go/v2/genesis"
+	"github.com/pasichDev/noso-go/v2/mempool"
+	"github.com/pasichDev/noso-go/v2/pow"
+	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/wallet"
 )
 
-// TestMineAndValidateCoinbase is the end-to-end gate for production
-// launch. It boots an in-memory chain at genesis, starts the miner with
-// a real CoinbaseStore, mines three blocks, and verifies each one was
-// accepted by the chain validator — which checks:
-//
-//	- LWMA-3 difficulty
-//	- NosoX (Argon2id) proof of work
-//	- coinbase Schnorr signature against the recovered r·G
-//	- Borromean range proofs for plain outputs
-//
-// If any production bug in coinbase signing or range-proof verification
-// returns, this test fails.
+// TestMineAndValidateCoinbase checks local production and validation of signed
+// subsidy-only blocks. It is not a production launch gate and does not exercise
+// plain output proofs; those have full chain and P2P spend tests separately.
 func TestMineAndValidateCoinbase(t *testing.T) {
 	dir := t.TempDir()
 	c := chain.NewMemory()

@@ -1,7 +1,7 @@
 package wallet
 
 import (
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
 )
 
 // v2cryptoSchnorrSign is a thin wrapper so coinbase.go can call into

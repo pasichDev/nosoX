@@ -3,7 +3,7 @@ package blockchain
 import (
 	"testing"
 
-	"github.com/noso-project/noso-go/internal/crypto"
+	"github.com/pasichDev/noso-go/internal/crypto"
 )
 
 func TestTransferOrderRoundTrip(t *testing.T) {

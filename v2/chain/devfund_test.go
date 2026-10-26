@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 func blk(fees []uint64, devOuts []types.Commitment) *types.Block {

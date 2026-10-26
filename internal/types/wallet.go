@@ -16,7 +16,7 @@
 package types
 
 import (
-	"github.com/noso-project/noso-go/internal/codec"
+	"github.com/pasichDev/noso-go/internal/codec"
 )
 
 // WalletRecordSize is the on-disk size of one WalletData record in

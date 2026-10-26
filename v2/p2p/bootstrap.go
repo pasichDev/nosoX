@@ -78,13 +78,16 @@ func ParseMultiaddrs(s string) []peer.AddrInfo {
 // added to the peerstore with permanent TTL so AutoRelay can keep
 // reservations open.
 func (n *Libp2pNode) AddRelays(relays []string) {
+	if len(relays) > 32 {
+		relays = relays[:32]
+	}
 	for _, info := range ParseMultiaddrs(strings.Join(relays, ",")) {
 		n.host.Peerstore().AddAddrs(info.ID, info.Addrs, time.Hour*24*30)
-		go func(info peer.AddrInfo) {
+		n.launch(func() {
 			ctx, cancel := context.WithTimeout(n.ctx, 10*time.Second)
 			defer cancel()
 			_ = n.host.Connect(ctx, info)
-		}(info)
+		})
 	}
 }
 
@@ -95,6 +98,9 @@ func (n *Libp2pNode) startBootstrap(seeds []string) {
 		return
 	}
 	var wg sync.WaitGroup
+	if len(seeds) > 512 {
+		seeds = seeds[:512]
+	}
 	for _, s := range seeds {
 		wg.Add(1)
 		go func(addr string) {
@@ -130,6 +136,6 @@ func (n *Libp2pNode) Bootstrap(cfg BootstrapConfig) {
 	seeds = append(seeds, ResolveDNSSeeds(dnsCtx, cfg.Network, 5*time.Second)...)
 	cancel()
 	if len(seeds) > 0 {
-		go n.startBootstrap(seeds)
+		n.launch(func() { n.startBootstrap(seeds) })
 	}
 }

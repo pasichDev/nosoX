@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/noso-project/noso-go/internal/types"
+	"github.com/pasichDev/noso-go/internal/types"
 )
 
 func TestLayoutPaths(t *testing.T) {

@@ -1,10 +1,9 @@
 package genesis
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 func TestEmptyGenesis(t *testing.T) {
@@ -20,11 +19,10 @@ func TestEmptyGenesis(t *testing.T) {
 	}
 }
 
-func TestGenesisFromFixture59238(t *testing.T) {
-	path, err := filepath.Abs(filepath.Join("..", "..", "testdata", "sumary_59238.psk"))
-	if err != nil {
-		t.Fatal(err)
-	}
+// The original historical fixture is explicitly rejected by
+// TestRejectOriginalMalformedSnapshot. This test uses a named synthetic input.
+func TestGenesisFromSyntheticSnapshot(t *testing.T) {
+	path := validSnapshot(t)
 	cfg := Default()
 	cfg.SummaryPath = path
 	block, info, gvts, err := Build(cfg)
@@ -34,8 +32,8 @@ func TestGenesisFromFixture59238(t *testing.T) {
 	if block.Header.Height != 0 {
 		t.Errorf("genesis height = %d, want 0", block.Header.Height)
 	}
-	if len(info) < 100 {
-		t.Errorf("only %d legacy outputs carried; expected many more", len(info))
+	if len(info) != 1 {
+		t.Errorf("only %d legacy outputs carried; expected one synthetic account", len(info))
 	}
 	if len(info)+len(gvts) != len(block.Outputs) {
 		t.Errorf("info+gvts/outputs length mismatch: %d+%d vs %d", len(info), len(gvts), len(block.Outputs))

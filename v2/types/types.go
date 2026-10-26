@@ -161,24 +161,25 @@ type Transaction struct {
 // BlockHeader carries the chain metadata. Hash(header) is the block ID
 // and what the PoW must brute-force a nonce against.
 type BlockHeader struct {
-	Version     uint32
-	Height      uint64
-	Timestamp   int64 // unix seconds
-	PrevHash    Hash
-	OutputRoot  Hash    // Merkle root of the post-block UTXO set
-	KernelRoot  Hash    // Merkle root of all kernels in this block
+	Version           uint32
+	NetworkMagic      uint32 // chain domain, pinned by trusted genesis
+	Height            uint64
+	Timestamp         int64 // unix seconds
+	PrevHash          Hash
+	OutputRoot        Hash       // ordered commitment to all outputs and proofs
+	KernelRoot        Hash       // ordered commitment to all inputs and signed kernels
 	TotalKernelOffset Commitment // sum-of-all-kernel-offsets (proof aggregation)
-	Difficulty  uint64  // target as: hash <= MaxTarget / Difficulty
-	Nonce       uint64
+	Difficulty        uint64     // target as: hash <= MaxTarget / Difficulty
+	Nonce             uint64
 }
 
 // Block bundles a header with its transaction body. Coinbase output and
 // kernel are included like any other.
 type Block struct {
-	Header     BlockHeader
-	Inputs     []Input
-	Outputs    []Output
-	Kernels    []Kernel
+	Header  BlockHeader
+	Inputs  []Input
+	Outputs []Output
+	Kernels []Kernel
 }
 
 // Genesis settings — defaults for the canonical Noso v2 launch.
@@ -188,7 +189,7 @@ const (
 	NetworkMagicMainnet uint32 = 0x4e4f5832 // "NOX2"
 	NetworkMagicTestnet uint32 = 0x4e4f5854 // "NOXT"
 
-	BlockVersion uint32 = 1
+	BlockVersion uint32 = 2
 
 	// TargetBlockTime is the desired interval between blocks.
 	TargetBlockTimeSeconds int64 = 120
@@ -208,7 +209,7 @@ const (
 	CoinUnits int64 = 100_000_000
 
 	// Reward schedule mirrors v1 for continuity.
-	InitialReward        int64 = 5_000_000_000
+	InitialReward        int64  = 5_000_000_000
 	BlockHalvingInterval uint64 = 210_000
 	HalvingSteps         uint64 = 10
 )
@@ -232,6 +233,7 @@ func BlockReward(height uint64) int64 {
 func EncodeHeader(h *BlockHeader) []byte {
 	buf := make([]byte, 0, 4+8+8+32+32+32+33+8+8)
 	buf = binary.BigEndian.AppendUint32(buf, h.Version)
+	buf = binary.BigEndian.AppendUint32(buf, h.NetworkMagic)
 	buf = binary.BigEndian.AppendUint64(buf, h.Height)
 	buf = binary.BigEndian.AppendUint64(buf, uint64(h.Timestamp))
 	buf = append(buf, h.PrevHash[:]...)
@@ -251,7 +253,7 @@ func HeaderID(h *BlockHeader) Hash {
 
 // EncodeKernel returns the canonical kernel-hash preimage.
 func EncodeKernel(k *Kernel) []byte {
-	buf := make([]byte, 0, 1+8+8+33)
+	buf := []byte("NosoX/kernel/v2\x00")
 	buf = append(buf, byte(k.Features))
 	buf = binary.BigEndian.AppendUint64(buf, k.Fee)
 	buf = binary.BigEndian.AppendUint64(buf, k.LockHeight)
@@ -266,18 +268,13 @@ func KernelID(k *Kernel) Hash {
 
 // EncodeOutput returns a canonical preimage for hashing.
 func EncodeOutput(o *Output) []byte {
-	buf := []byte{byte(o.Features)}
+	buf := []byte("NosoX/output/v2\x00")
+	buf = append(buf, byte(o.Features))
 	buf = append(buf, o.Commit[:]...)
-	if o.Features == OutputFeaturesLegacy || o.Features == OutputFeaturesLegacyGVT {
-		buf = append(buf, []byte(o.LegacyAddress)...)
-		buf = binary.BigEndian.AppendUint64(buf, uint64(o.LegacyAmount))
-	}
-	if o.Features == OutputFeaturesLegacyGVT {
-		buf = append(buf, o.GVTNumber)
-	}
-	// RangeProof omitted from the identity hash so that aggregating
-	// kernels (cut-through) can rewrite proofs without changing IDs.
-	return buf
+	buf = appendField(buf, o.RangeProof)
+	buf = appendField(buf, []byte(o.LegacyAddress))
+	buf = binary.BigEndian.AppendUint64(buf, uint64(o.LegacyAmount))
+	return append(buf, o.GVTNumber)
 }
 
 // OutputID returns SHA-256 of the canonical preimage.

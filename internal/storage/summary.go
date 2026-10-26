@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/noso-project/noso-go/internal/types"
+	"github.com/pasichDev/noso-go/internal/types"
 )
 
 // SummaryStore is a thread-safe wrapper around `sumary.psk` providing:

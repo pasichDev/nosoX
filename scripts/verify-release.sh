@@ -9,6 +9,7 @@ set -euo pipefail
 
 DIR="${1:?usage: verify-release.sh <dir> [launcher.pub]}"
 PUB="${2:-}"
+if [[ -n "$PUB" ]]; then PUB="$(realpath -- "$PUB")"; fi
 
 cd "$DIR"
 
@@ -34,4 +35,8 @@ if [[ -n "$PUB" ]]; then
   minisign -V -p "$PUB" -m SHA256SUMS
   echo "  ✓ signature verifies under $PUB"
 fi
-echo "Release is good."
+if [[ -z "$PUB" ]]; then
+  echo "Checksums match; publisher authenticity was not checked."
+else
+  echo "Checksums and publisher signature verified."
+fi

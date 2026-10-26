@@ -4,11 +4,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 func TestGenesisCarriesGVTs(t *testing.T) {
-	sumPath, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "sumary_59238.psk"))
+	sumPath := validSnapshot(t) // original malformed snapshot is tested separately
 	gvtPath, _ := filepath.Abs(filepath.Join("..", "..", "testdata", "gvts.psk"))
 
 	cfg := Default()

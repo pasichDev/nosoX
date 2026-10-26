@@ -12,14 +12,15 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/pow"
-	"github.com/noso-project/noso-go/v2/types"
-	"github.com/noso-project/noso-go/v2/wallet"
+	"github.com/pasichDev/noso-go/v2/pow"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // Chain composes a Store with validation rules, difficulty calculation,
@@ -29,6 +30,7 @@ type Chain struct {
 	mu          sync.Mutex
 	store       Store
 	checkpoints []types.Checkpoint
+	now         func() time.Time
 }
 
 // SetCheckpoints installs the trusted (height, hash) pairs that the
@@ -81,22 +83,49 @@ func (c *Chain) LoadOrInit(dir string, genesis *types.Block) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	if err := validateGenesis(genesis); err != nil {
+		return err
+	}
+	if cp, ok := types.CheckpointForHeight(c.checkpoints, 0); ok && types.HeaderID(&genesis.Header) != cp.Hash {
+		return ErrCheckpoint
+	}
 	switch s := c.store.(type) {
 	case *memStore:
 		statePath := filepath.Join(dir, "state.gob")
 		if data, err := os.ReadFile(statePath); err == nil {
-			return s.loadGob(data, statePath)
+			restored := newMemStore()
+			if err := restored.loadGob(data, statePath); err != nil {
+				return err
+			}
+			if err := c.verifyHistory(restored, genesis); err != nil {
+				return err
+			}
+			c.store = restored
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if _, ok := s.Tip(); ok {
+			return c.verifyHistory(s, genesis)
 		}
 		s.dir = dir
 		return s.applyGenesis(genesis)
 	case *BadgerStore:
 		if _, ok := s.Tip(); ok {
-			return nil // already initialized
+			return c.verifyHistory(s, genesis)
+		}
+		empty, err := s.isEmpty()
+		if err != nil {
+			return err
+		}
+		if !empty {
+			return errors.New("chain: missing or corrupt persisted tip")
 		}
 		return s.WriteBlock(genesis)
 	default:
 		return errors.New("chain: unknown store backend")
 	}
+
 }
 
 // Close releases backend resources.
@@ -169,6 +198,14 @@ func (c *Chain) AddBlock(b *types.Block) error {
 	return c.store.WriteBlock(b)
 }
 
+// ValidateBlock checks a candidate extending the current tip without changing
+// canonical or persistent state. Fork blocks require staged ReorgTo validation.
+func (c *Chain) ValidateBlock(b *types.Block) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.validate(b)
+}
+
 // NextDifficulty returns the LWMA-3 expected difficulty for the next
 // block on top of the current tip. Miners should use this to template
 // candidate blocks; the validator will reject any block that doesn't
@@ -186,168 +223,132 @@ func (c *Chain) Save() error {
 	return c.store.Save()
 }
 
-// ReorgTo replaces the current chain suffix with the supplied
-// `incoming` blocks. The incoming chain MUST share a common ancestor
-// with the current chain within `SecurityBlocks` of tip; otherwise
-// ErrTooDeep is returned. The algorithm:
-//
-//  1. Walk `incoming` newest→oldest to find the ancestor block hash
-//     (its PrevHash field on the eldest incoming block must point at a
-//     block we have).
-//  2. Undo our current blocks one by one until we are at that ancestor.
-//  3. Apply the incoming blocks oldest→newest via validate + WriteBlock.
-//
-// On any error the chain is left in its pre-reorg state — undone
-// blocks are re-applied. Caller does not need to handle partial state.
+// ReorgTo validates an oldest-first incoming suffix against an isolated state.
+// The common ancestor must be within 1024 blocks and preserve checkpoints.
+// Only strictly greater valid accumulated work replaces the canonical chain,
+// committed atomically by the backend after every candidate block succeeds.
 func (c *Chain) ReorgTo(incoming []*types.Block) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(incoming) == 0 {
-		return errors.New("chain: empty incoming chain")
+	if len(incoming) == 0 || len(incoming) > 1024 || incoming[0] == nil {
+		return errors.New("chain: invalid incoming suffix")
 	}
 	tip, ok := c.store.Tip()
 	if !ok {
-		return errors.New("chain: cannot reorg an empty chain")
+		return errors.New("chain: empty chain")
 	}
-	ancestorHash := incoming[0].Header.PrevHash
-	ancestorHeight, ok := c.store.HeightOf(ancestorHash)
+	ancestorHeight, ok := c.store.HeightOf(incoming[0].Header.PrevHash)
 	if !ok {
 		return ErrUnknownAnc
 	}
-	// Refuse any reorg that would cross the latest published checkpoint —
-	// even a single block deeper than the checkpoint disqualifies the fork.
+	if ancestorHeight > tip.Height {
+		return ErrUnknownAnc
+	}
 	if maxCP := types.MaxCheckpointHeight(c.checkpoints); maxCP > 0 && ancestorHeight < maxCP {
 		return ErrCheckpoint
 	}
-	depth := int64(tip.Height) - int64(ancestorHeight)
-	if depth > int64(types.CoinbaseLock)*int64(types.DifficultyWindow) || depth > 1024 {
+	if tip.Height-ancestorHeight > 1024 {
 		return ErrTooDeep
 	}
-
-	// 1. Undo to ancestor, collecting the old blocks so we can replay
-	//    them if the new chain fails to apply.
-	undone := make([]*types.Block, 0, depth)
-	for h := tip.Height; h > ancestorHeight; h-- {
-		blk, err := c.store.BlockAt(h)
+	// Reject malformed suffixes before copying any retained history.
+	parent := incoming[0].Header.PrevHash
+	height := ancestorHeight
+	for _, b := range incoming {
+		if err := validateStructure(b); err != nil {
+			return err
+		}
+		if height == math.MaxUint64 || b.Header.Height != height+1 || b.Header.PrevHash != parent {
+			return ErrStale
+		}
+		parent = types.HeaderID(&b.Header)
+		height++
+	}
+	// Validate against an isolated copy. No live or durable mutation occurs until
+	// every incoming block is validated and its accumulated work strictly wins.
+	staged := newMemStore()
+	for h := uint64(0); h <= ancestorHeight; h++ {
+		b, err := c.store.BlockAt(h)
 		if err != nil {
-			return fmt.Errorf("chain: read block %d during reorg: %w", h, err)
+			return err
 		}
-		undone = append(undone, blk)
-		if err := c.store.UndoBlock(); err != nil {
-			// Best-effort recovery: re-apply what we already removed.
-			c.replay(undone[:len(undone)-1])
-			return fmt.Errorf("chain: undo block %d: %w", h, err)
+		if err = staged.WriteBlock(b); err != nil {
+			return err
 		}
 	}
-
-	// 2. Apply incoming. If any block fails validation, roll back.
-	applied := 0
-	for i := range incoming {
-		if err := c.validate(incoming[i]); err != nil {
-			c.replay(undone)
-			// Re-undo whatever we already applied from incoming.
-			for j := 0; j < applied; j++ {
-				_ = c.store.UndoBlock()
-			}
-			return fmt.Errorf("chain: validate incoming block %d: %w", i, err)
+	candidate := &Chain{store: staged, checkpoints: c.checkpoints, now: c.now}
+	newWork, oldWork := new(big.Int), new(big.Int)
+	for h := ancestorHeight + 1; h <= tip.Height; h++ {
+		b, err := c.store.BlockAt(h)
+		if err != nil {
+			return err
 		}
-		if err := c.store.WriteBlock(incoming[i]); err != nil {
-			c.replay(undone)
-			return fmt.Errorf("chain: write incoming block %d: %w", i, err)
-		}
-		applied++
+		oldWork.Add(oldWork, blockWork(b.Header.Difficulty))
 	}
-	return nil
+	for i, b := range incoming {
+		if err := candidate.validate(b); err != nil {
+			return fmt.Errorf("chain: incoming %d: %w", i, err)
+		}
+		if err := staged.WriteBlock(b); err != nil {
+			return err
+		}
+		newWork.Add(newWork, blockWork(b.Header.Difficulty))
+	}
+	if newWork.Cmp(oldWork) <= 0 {
+		return errors.New("chain: fork does not have strictly greater work")
+	}
+	return c.store.ReplaceChain(staged.blocks)
 }
 
-// replay re-applies the slice of blocks that were undone, oldest first.
-// We accept that re-applied blocks already passed validation once, so
-// we skip re-checking them.
-func (c *Chain) replay(undone []*types.Block) {
-	// undone is in newest→oldest order, so iterate backwards.
-	for i := len(undone) - 1; i >= 0; i-- {
-		_ = c.store.WriteBlock(undone[i])
-	}
+// blockWork is floor(2^256/(target+1)), using exactly the target accepted by PoW.
+func blockWork(difficulty uint64) *big.Int {
+	denominator := new(big.Int).Add(pow.Target(difficulty), big.NewInt(1))
+	return new(big.Int).Div(new(big.Int).Lsh(big.NewInt(1), 256), denominator)
 }
 
 // ---- validation helpers ------------------------------------------------
 
 // validate runs per-block invariants. Caller holds c.mu.
 func (c *Chain) validate(b *types.Block) error {
+	if err := validateStructure(b); err != nil {
+		return err
+	}
 	tip, ok := c.store.Tip()
-	if ok {
-		if b.Header.PrevHash != types.HeaderID(&tip) {
-			return ErrStale
-		}
-		if b.Header.Height != tip.Height+1 {
-			return fmt.Errorf("chain: expected height %d, got %d",
-				tip.Height+1, b.Header.Height)
-		}
-		want := c.expectedDifficulty()
-		if b.Header.Difficulty != want {
-			return fmt.Errorf("%w: have %d want %d",
-				ErrBadDiff, b.Header.Difficulty, want)
-		}
+	if !ok {
+		return errors.New("chain: initialize trusted genesis first")
+	}
+	if tip.Height == math.MaxUint64 || b.Header.PrevHash != types.HeaderID(&tip) {
+		return ErrStale
+	}
+	if b.Header.Height != tip.Height+1 {
+		return errors.New("chain: wrong height")
+	}
+	if b.Header.NetworkMagic != tip.NetworkMagic {
+		return errors.New("chain: network mismatch")
+	}
+	if b.Header.Timestamp <= tip.Timestamp {
+		return errors.New("chain: timestamp must advance")
+	}
+	// Consensus accepts at most two hours of future drift relative to the
+	// validator's UTC Unix clock. Big integers avoid overflow on hostile timestamps.
+	clockNow := time.Now()
+	if c.now != nil {
+		clockNow = c.now()
+	}
+	ahead := new(big.Int).Sub(big.NewInt(b.Header.Timestamp), big.NewInt(clockNow.Unix()))
+	if ahead.Cmp(big.NewInt(2*60*60)) > 0 {
+		return errors.New("chain: timestamp exceeds future drift")
+	}
+
+	if b.Header.Difficulty != c.expectedDifficulty() {
+		return ErrBadDiff
+	}
+	if cp, ok := types.CheckpointForHeight(c.checkpoints, b.Header.Height); ok && types.HeaderID(&b.Header) != cp.Hash {
+		return ErrCheckpoint
 	}
 	if !pow.Verify(&b.Header) {
 		return ErrBadPoW
 	}
-	// Checkpoint guard — if a checkpoint pins this height, the incoming
-	// block's hash must match it exactly.
-	if cp, ok := types.CheckpointForHeight(c.checkpoints, b.Header.Height); ok {
-		if types.HeaderID(&b.Header) != cp.Hash {
-			return ErrCheckpoint
-		}
-	}
-	for i := range b.Inputs {
-		if !c.store.HasUTXO(b.Inputs[i].Commit) {
-			return fmt.Errorf("%w: input %d", ErrDoubleSpend, i)
-		}
-	}
-	// Verify coinbase Schnorr sig if present.
-	reward := types.BlockReward(b.Header.Height)
-	if reward > 0 {
-		var foundCB bool
-		for i := range b.Outputs {
-			if b.Outputs[i].Features == types.OutputFeaturesCoinbase {
-				foundCB = true
-				// Find the matching coinbase kernel.
-				for j := range b.Kernels {
-					k := &b.Kernels[j]
-					if k.Features != types.KernelFeaturesCoinbase {
-						continue
-					}
-					if k.Excess != b.Outputs[i].Commit {
-						continue
-					}
-					if len(k.ExcessSig) > 0 && !wallet.VerifyCoinbase(b.Header.Height, reward, k.Excess, k.ExcessSig) {
-						return errors.New("chain: bad coinbase Schnorr signature")
-					}
-					break
-				}
-				break
-			}
-		}
-		_ = foundCB
-	}
-	// Verify per-output range proofs (currently SimpleRangeProof; will be
-	// real Bulletproofs once the upgrade lands).
-	for i := range b.Outputs {
-		o := &b.Outputs[i]
-		if o.Features != types.OutputFeaturesPlain {
-			continue
-		}
-		if !v2crypto.VerifyRange(o.Commit, o.RangeProof) {
-			return fmt.Errorf("chain: output %d has invalid range proof", i)
-		}
-	}
-	// Transparent dev fee: per-block network fees must be paid to the public
-	// dev-fund address (see docs/v2/DEVFUND.md).
-	if err := validateDevFund(b); err != nil {
-		return err
-	}
-	// Core MW no-inflation invariant: Σ plain_out − Σ in + fee·H == Σ excess.
-	if err := c.validateBalance(b); err != nil {
+	if err := c.validateBody(b, true); err != nil {
 		return err
 	}
 	return nil
@@ -369,14 +370,19 @@ func (c *Chain) expectedDifficulty() uint64 {
 	difficulties := make([]uint64, 0, N)
 	prev, err := c.store.BlockAt(tip.Height - N)
 	if err != nil {
-		return tip.Difficulty
-	}
+		return 0
+	} // missing history must stop validation/mining
 	for h := tip.Height - N + 1; h <= tip.Height; h++ {
 		blk, err := c.store.BlockAt(h)
 		if err != nil {
-			return tip.Difficulty
+			return 0
 		}
-		solveTimes = append(solveTimes, blk.Header.Timestamp-prev.Header.Timestamp)
+		delta := new(big.Int).Sub(big.NewInt(blk.Header.Timestamp), big.NewInt(prev.Header.Timestamp))
+		if !delta.IsInt64() {
+			solveTimes = append(solveTimes, math.MaxInt64)
+		} else {
+			solveTimes = append(solveTimes, delta.Int64())
+		}
 		difficulties = append(difficulties, blk.Header.Difficulty)
 		prev = blk
 	}
@@ -386,18 +392,22 @@ func (c *Chain) expectedDifficulty() uint64 {
 // ---- in-memory store implementation (gob-persisted) -------------------
 
 type memStore struct {
-	dir       string
-	blocks    []*types.Block
-	heightOf  map[types.Hash]uint64
-	utxo      map[types.Commitment]types.Output
-	legacyIdx map[string]types.Commitment
+	dir        string
+	blocks     []*types.Block
+	heightOf   map[types.Hash]uint64
+	utxo       map[types.Commitment]types.Output
+	legacyIdx  map[string]types.Commitment
+	outputSeen map[types.Commitment]bool
+	kernelSeen map[types.Hash]bool
 }
 
 func newMemStore() *memStore {
 	return &memStore{
-		heightOf:  map[types.Hash]uint64{},
-		utxo:      map[types.Commitment]types.Output{},
-		legacyIdx: map[string]types.Commitment{},
+		heightOf:   map[types.Hash]uint64{},
+		utxo:       map[types.Commitment]types.Output{},
+		legacyIdx:  map[string]types.Commitment{},
+		outputSeen: map[types.Commitment]bool{},
+		kernelSeen: map[types.Hash]bool{},
 	}
 }
 
@@ -424,7 +434,7 @@ func (s *memStore) BlockAt(h uint64) (*types.Block, error) {
 	if h >= uint64(len(s.blocks)) {
 		return nil, errors.New("store: height out of range")
 	}
-	return s.blocks[h], nil
+	return cloneBlock(s.blocks[h]), nil
 }
 
 func (s *memStore) BlockByHash(h types.Hash) (*types.Block, error) {
@@ -432,16 +442,20 @@ func (s *memStore) BlockByHash(h types.Hash) (*types.Block, error) {
 	if !ok {
 		return nil, errors.New("store: unknown block hash")
 	}
-	return s.blocks[idx], nil
+	return cloneBlock(s.blocks[idx]), nil
 }
 
 func (s *memStore) HasUTXO(c types.Commitment) bool { _, ok := s.utxo[c]; return ok }
+
+func (s *memStore) HasOutput(c types.Commitment) bool { return s.outputSeen[c] }
+func (s *memStore) HasKernel(h types.Hash) bool       { return s.kernelSeen[h] }
 
 func (s *memStore) UTXOByCommit(c types.Commitment) (*types.Output, bool) {
 	o, ok := s.utxo[c]
 	if !ok {
 		return nil, false
 	}
+	o.RangeProof = append([]byte(nil), o.RangeProof...)
 	return &o, true
 }
 
@@ -451,10 +465,38 @@ func (s *memStore) UTXOByLegacyAddress(addr string) (*types.Output, bool) {
 		return nil, false
 	}
 	o := s.utxo[c]
+	o.RangeProof = append([]byte(nil), o.RangeProof...)
 	return &o, true
 }
 
 func (s *memStore) WriteBlock(b *types.Block) error {
+	if b == nil {
+		return errors.New("store: nil block")
+	}
+	if b.Header.Height != uint64(len(s.blocks)) {
+		return errors.New("store: noncontiguous height")
+	}
+	if len(s.blocks) > 0 && b.Header.PrevHash != types.HeaderID(&s.blocks[len(s.blocks)-1].Header) {
+		return ErrStale
+	}
+	if len(s.blocks) == 0 && !b.Header.PrevHash.IsZero() {
+		return ErrStale
+	}
+	if _, ok := s.heightOf[types.HeaderID(&b.Header)]; ok {
+		return errors.New("store: block hash already exists")
+	}
+	_, err := checkStoreDelta(b, deltaReader{
+		output: func(c types.Commitment) (*types.Output, bool, error) {
+			out, ok := s.UTXOByCommit(c)
+			return out, ok, nil
+		},
+		seenOutput: func(c types.Commitment) (bool, error) { return s.HasOutput(c), nil },
+		seenKernel: func(id types.Hash) (bool, error) { return s.HasKernel(id), nil },
+	})
+	if err != nil {
+		return err
+	}
+	b = cloneBlock(b)
 	for i := range b.Inputs {
 		c := b.Inputs[i].Commit
 		if o, ok := s.utxo[c]; ok && o.Features == types.OutputFeaturesLegacy {
@@ -464,9 +506,13 @@ func (s *memStore) WriteBlock(b *types.Block) error {
 	}
 	for i := range b.Outputs {
 		s.utxo[b.Outputs[i].Commit] = b.Outputs[i]
+		s.outputSeen[b.Outputs[i].Commit] = true
 		if b.Outputs[i].Features == types.OutputFeaturesLegacy {
 			s.legacyIdx[b.Outputs[i].LegacyAddress] = b.Outputs[i].Commit
 		}
+	}
+	for _, k := range b.Kernels {
+		s.kernelSeen[types.KernelID(&k)] = true
 	}
 	s.blocks = append(s.blocks, b)
 	s.heightOf[types.HeaderID(&b.Header)] = b.Header.Height
@@ -477,29 +523,21 @@ func (s *memStore) UndoBlock() error {
 	if len(s.blocks) <= 1 {
 		return errors.New("store: refuse to undo genesis")
 	}
-	tip := s.blocks[len(s.blocks)-1]
-	for i := range tip.Outputs {
-		out := tip.Outputs[i]
-		delete(s.utxo, out.Commit)
-		if out.Features == types.OutputFeaturesLegacy {
-			delete(s.legacyIdx, out.LegacyAddress)
+	return s.ReplaceChain(s.blocks[:len(s.blocks)-1])
+}
+
+func (s *memStore) ReplaceChain(blocks []*types.Block) error {
+	next := newMemStore()
+	next.dir = s.dir
+	for _, b := range blocks {
+		if b == nil {
+			return errors.New("store: nil block")
+		}
+		if err := next.WriteBlock(b); err != nil {
+			return err
 		}
 	}
-	for i := range tip.Inputs {
-		in := tip.Inputs[i]
-		restored := types.Output{
-			Features:      in.Features,
-			Commit:        in.Commit,
-			LegacyAddress: in.LegacyAddr,
-			LegacyAmount:  in.LegacyAmount,
-		}
-		s.utxo[in.Commit] = restored
-		if restored.Features == types.OutputFeaturesLegacy {
-			s.legacyIdx[restored.LegacyAddress] = restored.Commit
-		}
-	}
-	delete(s.heightOf, types.HeaderID(&tip.Header))
-	s.blocks = s.blocks[:len(s.blocks)-1]
+	*s = *next
 	return nil
 }
 
@@ -523,7 +561,15 @@ func (s *memStore) Save() error {
 		return err
 	}
 	_ = f.Close()
-	return os.Rename(tmp, statePath)
+	if err := os.Rename(tmp, statePath); err != nil {
+		return err
+	}
+	d, err := os.Open(s.dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 func (s *memStore) Close() error { return s.Save() }
@@ -533,26 +579,11 @@ func (s *memStore) loadGob(data []byte, path string) error {
 	if err := gob.NewDecoder(bytesReader(data)).Decode(&blocks); err != nil {
 		return fmt.Errorf("store: decode %s: %w", path, err)
 	}
-	s.blocks = blocks
-	s.heightOf = map[types.Hash]uint64{}
-	s.utxo = map[types.Commitment]types.Output{}
-	s.legacyIdx = map[string]types.Commitment{}
-	for h := range blocks {
-		b := blocks[h]
-		s.heightOf[types.HeaderID(&b.Header)] = uint64(h)
-		for i := range b.Inputs {
-			c := b.Inputs[i].Commit
-			if o, ok := s.utxo[c]; ok && o.Features == types.OutputFeaturesLegacy {
-				delete(s.legacyIdx, o.LegacyAddress)
-			}
-			delete(s.utxo, c)
-		}
-		for i := range b.Outputs {
-			s.utxo[b.Outputs[i].Commit] = b.Outputs[i]
-			if b.Outputs[i].Features == types.OutputFeaturesLegacy {
-				s.legacyIdx[b.Outputs[i].LegacyAddress] = b.Outputs[i].Commit
-			}
-		}
+	if len(blocks) == 0 {
+		return errors.New("store: empty snapshot")
+	}
+	if err := s.ReplaceChain(blocks); err != nil {
+		return err
 	}
 	s.dir = filepath.Dir(path)
 	return nil

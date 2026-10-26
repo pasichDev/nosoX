@@ -20,45 +20,58 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/noso-project/noso-go/v2/chain"
-	"github.com/noso-project/noso-go/v2/genesis"
-	"github.com/noso-project/noso-go/v2/mempool"
-	"github.com/noso-project/noso-go/v2/miner"
-	"github.com/noso-project/noso-go/v2/p2p"
-	"github.com/noso-project/noso-go/v2/rpc"
-	"github.com/noso-project/noso-go/v2/types"
-	"github.com/noso-project/noso-go/v2/wallet"
+	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/noso-go/v2/genesis"
+	"github.com/pasichDev/noso-go/v2/mempool"
+	"github.com/pasichDev/noso-go/v2/miner"
+	"github.com/pasichDev/noso-go/v2/p2p"
+	"github.com/pasichDev/noso-go/v2/rpc"
+	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/wallet"
 )
 
 func main() {
 	var (
-		dataDir         = flag.String("data", "./nosox-data", "data directory")
-		rpcAddr         = flag.String("rpc", ":7780", "JSON-RPC listen address")
-		p2pAddr         = flag.String("p2p", ":7781", "P2P listen address")
-		seedAddr        = flag.String("seed", "", "comma-separated libp2p multi-addrs of seed peers")
-		relayAddr       = flag.String("relay", "", "comma-separated libp2p multi-addrs of relay nodes (for NAT)")
-		httpSeeds       = flag.Bool("http-seeds", true, "fetch the published seed list over HTTPS at startup (see v2/p2p/httpseeds.go)")
-		genesisSummary  = flag.String("genesis-summary", "", "path to v1 sumary.psk to airdrop into genesis (only used on first start)")
-		genesisGVTs     = flag.String("genesis-gvts", "", "path to v1 gvts.psk to carry forward 100 GVT tokens (only used on first start)")
-		networkName     = flag.String("network", "mainnet", "mainnet | testnet")
-		doMine          = flag.Bool("mine", false, "start mining immediately")
-		mineThreads     = flag.Int("threads", 1, "mining threads")
-		mineReward      = flag.String("reward", "nosox-default", "reward identifier for coinbase output")
-		rpcToken        = flag.String("rpc-token", "", "Bearer token for mutating RPC methods; empty = no auth (only safe on 127.0.0.1)")
-		rpcTLSCert      = flag.String("rpc-tls-cert", "", "TLS cert file: serve RPC over HTTPS directly from the node (so HTTPS browser apps can connect, no reverse proxy)")
-		rpcTLSKey       = flag.String("rpc-tls-key", "", "TLS key file (required with -rpc-tls-cert)")
+		dataDir        = flag.String("data", "./nosox-data", "data directory")
+		rpcAddr        = flag.String("rpc", "127.0.0.1:7780", "JSON-RPC listen address")
+		p2pAddr        = flag.String("p2p", "127.0.0.1:7781", "P2P listen address")
+		seedAddr       = flag.String("seed", "", "comma-separated libp2p multi-addrs of seed peers")
+		relayAddr      = flag.String("relay", "", "comma-separated libp2p multi-addrs of relay nodes (for NAT)")
+		httpSeeds      = flag.Bool("http-seeds", false, "fetch the published seed list over HTTPS at startup (see v2/p2p/httpseeds.go)")
+		genesisSummary = flag.String("genesis-summary", "", "path to v1 sumary.psk to airdrop into genesis (only used on first start)")
+		genesisGVTs    = flag.String("genesis-gvts", "", "path to v1 gvts.psk to carry forward 100 GVT tokens (only used on first start)")
+		networkName    = flag.String("network", "testnet", "mainnet | testnet")
+		doMine         = flag.Bool("mine", false, "start mining immediately")
+		mineThreads    = flag.Int("threads", 1, "mining threads")
+		mineReward     = flag.String("reward", "nosox-default", "reward identifier for coinbase output")
+		rpcToken       = flag.String("rpc-token", "", "Bearer token for mutating RPC methods; empty = no auth (only safe on 127.0.0.1)")
+		rpcTLSCert     = flag.String("rpc-tls-cert", "", "TLS cert file: serve RPC over HTTPS directly from the node (so HTTPS browser apps can connect, no reverse proxy)")
+		rpcTLSKey      = flag.String("rpc-tls-key", "", "TLS key file (required with -rpc-tls-cert)")
 	)
 	flag.Parse()
 
 	logger := log.New(os.Stderr, "nosoxd ", log.LstdFlags|log.Lshortfile)
+	if err := validateRPCBind(*rpcAddr, *rpcToken); err != nil {
+		logger.Fatal(err)
+	}
+	if (*rpcTLSCert == "") != (*rpcTLSKey == "") {
+		logger.Fatal("both RPC TLS certificate and key are required")
+	}
+	if *networkName == "mainnet" {
+		logger.Fatal("mainnet disabled: unverified genesis and unresolved security release gates; use isolated testnet")
+	}
+	if *networkName != "mainnet" && *networkName != "testnet" {
+		logger.Fatal("unknown network")
+	}
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 		logger.Fatalf("data dir: %v", err)
 	}
@@ -89,7 +102,7 @@ func main() {
 	logger.Printf("chain ready: height=%d hash=%s difficulty=%d",
 		tip.Height, types.HeaderID(&tip), tip.Difficulty)
 
-	mp := mempool.New(2048)
+	mp := mempool.NewValidated(2048, c.ValidateTransaction)
 	cbStore, err := wallet.OpenCoinbaseStore(filepath.Join(*dataDir, "coinbases.json"))
 	if err != nil {
 		logger.Fatalf("open coinbase store: %v", err)
@@ -100,11 +113,11 @@ func main() {
 
 	// Listen on TCP and QUIC-v1 (UDP) on the same port. QUIC keeps the node
 	// reachable on lossy/mobile networks where TCP connections stall.
-	p2pPort := p2pAddrToPort(*p2pAddr)
-	node, err := p2p.NewLibp2p([]string{
-		"/ip4/0.0.0.0/tcp" + p2pPort,
-		"/ip4/0.0.0.0/udp" + p2pPort + "/quic-v1",
-	}, magic, c, mp)
+	listenAddrs, err := p2pListenAddrs(*p2pAddr)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	node, err := p2p.NewLibp2p(listenAddrs, magic, c, mp)
 	if err != nil {
 		logger.Fatalf("p2p: %v", err)
 	}
@@ -153,11 +166,7 @@ func main() {
 		Token:         *rpcToken,
 		GenesisConfig: &gCfg,
 	}
-	if *rpcToken == "" && !strings.HasPrefix(*rpcAddr, "127.") && !strings.HasPrefix(*rpcAddr, "localhost") {
-		logger.Printf("WARNING: RPC bound on %s with no -rpc-token; mutating "+
-			"methods are unprotected. Pass -rpc-token or bind 127.0.0.1.", *rpcAddr)
-	}
-	httpSrv := &http.Server{Addr: *rpcAddr, Handler: rpcSvc.HTTPHandler()}
+	httpSrv := &http.Server{Addr: *rpcAddr, Handler: rpcSvc.HTTPHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	rpcTLS := *rpcTLSCert != "" && *rpcTLSKey != ""
 	go func() {
 		var err error
@@ -203,13 +212,29 @@ func main() {
 	fmt.Fprintln(os.Stderr, "bye.")
 }
 
-// p2pAddrToPort takes a host:port pair (e.g. ":7781" or "0.0.0.0:7781")
-// and returns just the "/port" segment expected by libp2p multi-addrs.
-func p2pAddrToPort(s string) string {
-	if idx := strings.LastIndex(s, ":"); idx >= 0 {
-		return "/" + s[idx+1:]
+// Preserve the operator's requested host instead of silently exposing all
+// interfaces when a numeric loopback bind was requested.
+func p2pListenAddrs(addr string) ([]string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid P2P bind: %w", err)
 	}
-	return "/7781"
+	if _, err = strconv.ParseUint(port, 10, 16); err != nil {
+		return nil, fmt.Errorf("invalid P2P port: %w", err)
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil, fmt.Errorf("P2P bind requires a numeric IP")
+	}
+	family := "ip6"
+	if ip.To4() != nil {
+		family = "ip4"
+	}
+	prefix := "/" + family + "/" + ip.String()
+	return []string{prefix + "/tcp/" + port, prefix + "/udp/" + port + "/quic-v1"}, nil
 }
 
 func splitCSV(s string) []string {
@@ -227,4 +252,17 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// Unauthenticated administration is restricted to an explicit numeric loopback.
+func validateRPCBind(addr, token string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid RPC bind: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if token == "" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("non-loopback RPC requires -rpc-token")
+	}
+	return nil
 }

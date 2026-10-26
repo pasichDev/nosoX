@@ -1,6 +1,6 @@
 package types
 
-import "github.com/noso-project/noso-go/internal/codec"
+import "github.com/pasichDev/noso-go/internal/codec"
 
 // GVTSize is the on-disk size of TGVT. Source: `nosogvts.pas:11-16`.
 const GVTSize = 105

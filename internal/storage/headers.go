@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/noso-project/noso-go/internal/types"
+	"github.com/pasichDev/noso-go/internal/types"
 )
 
 // HeadersStore wraps `blchhead.nos`, the append-only block-fingerprint log.

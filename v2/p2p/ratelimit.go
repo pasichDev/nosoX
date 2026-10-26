@@ -45,6 +45,16 @@ func (r *rateLimiter) allow(p peer.ID) bool {
 	now := time.Now()
 	b, ok := r.buckets[p]
 	if !ok {
+		if len(r.buckets) >= 4096 {
+			for id, b := range r.buckets {
+				if now.Sub(b.last) > time.Minute {
+					delete(r.buckets, id)
+				}
+			}
+			if len(r.buckets) >= 4096 {
+				return false
+			}
+		}
 		r.buckets[p] = &bucket{tokens: r.burst, last: now}
 		b = r.buckets[p]
 	}

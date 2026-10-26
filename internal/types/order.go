@@ -1,6 +1,6 @@
 package types
 
-import "github.com/noso-project/noso-go/internal/codec"
+import "github.com/pasichDev/noso-go/internal/codec"
 
 // OrderSize is the on-disk size of TOrderData. Source:
 // `nosogeneral.pas:26-41`.

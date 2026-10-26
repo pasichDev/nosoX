@@ -61,6 +61,9 @@ type Server struct {
 	listener net.Listener
 	wg       sync.WaitGroup
 	logger   *log.Logger
+	active   map[net.Conn]struct{}
+	stopping bool
+	slots    chan struct{}
 
 	// timeouts protect against slow clients and dead connections.
 	ReadTimeout  time.Duration
@@ -76,6 +79,8 @@ func NewServer(addr string, logger *log.Logger) *Server {
 	return &Server{
 		addr:         addr,
 		handlers:     make(map[string]Handler),
+		active:       make(map[net.Conn]struct{}),
+		slots:        make(chan struct{}, 128),
 		logger:       logger,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -126,8 +131,24 @@ func (s *Server) acceptLoop(ctx context.Context) {
 			s.logger.Printf("network: accept error: %v", err)
 			continue
 		}
+		select {
+		case s.slots <- struct{}{}:
+		default:
+			_ = conn.Close()
+			continue
+		}
+		s.mu.Lock()
+		if s.stopping {
+			s.mu.Unlock()
+			<-s.slots
+			_ = conn.Close()
+			continue
+		}
+		s.active[conn] = struct{}{}
+		s.mu.Unlock()
 		s.wg.Add(1)
 		go func() {
+			defer func() { <-s.slots; s.mu.Lock(); delete(s.active, conn); s.mu.Unlock() }()
 			defer s.wg.Done()
 			s.handleConn(ctx, conn)
 		}()
@@ -139,13 +160,20 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	r := bufio.NewReaderSize(conn, maxLineLen+16)
+	stop := context.AfterFunc(connCtx, func() { _ = conn.Close() })
+	defer stop()
+	r := bufio.NewReaderSize(conn, maxLineLen+1)
 	w := bufio.NewWriter(conn)
 	for {
-		if s.IdleTimeout > 0 {
-			_ = conn.SetReadDeadline(time.Now().Add(s.IdleTimeout))
+		readTimeout := s.IdleTimeout
+		if s.ReadTimeout > 0 && (readTimeout <= 0 || s.ReadTimeout < readTimeout) {
+			readTimeout = s.ReadTimeout
 		}
-		line, err := r.ReadString('\n')
+		if readTimeout > 0 {
+			_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+		}
+		raw, err := r.ReadSlice('\n')
+		line := string(raw)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				s.logger.Printf("network: read from %s: %v", conn.RemoteAddr(), err)
@@ -161,6 +189,9 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			continue
 		}
 		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
 		cmd := strings.ToUpper(fields[0])
 		args := fields[1:]
 		s.mu.RLock()
@@ -190,6 +221,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.listener != nil {
 		_ = s.listener.Close()
 	}
+	s.mu.Lock()
+	s.stopping = true
+	for conn := range s.active {
+		_ = conn.Close()
+	}
+	s.mu.Unlock()
 	done := make(chan struct{})
 	go func() { s.wg.Wait(); close(done) }()
 	select {

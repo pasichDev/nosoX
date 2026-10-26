@@ -1,6 +1,6 @@
 package types
 
-import "github.com/noso-project/noso-go/internal/codec"
+import "github.com/pasichDev/noso-go/internal/codec"
 
 // ResumenDataSize is the size of one ResumenData record in blchhead.nos.
 // Source: `nosoheaders.pas:18-22`.

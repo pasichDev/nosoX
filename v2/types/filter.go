@@ -10,13 +10,10 @@ import (
 // the filter; if it matches one of the wallet's "watch" entries the
 // wallet fetches the full block to extract its outputs.
 //
-// The filter uses a Golomb-coded set (similar to BIP-158) for compactness.
-// To keep the v2 dependency surface small we implement a much simpler
-// counted-Bloom variant: a 256-bit bit array with k=4 independent hashes
-// per element. For block sizes typical of the first year of operation
-// (<100 outputs/block) the false-positive rate is ~1%, which is fine
-// for the use-case (a false positive just means the light wallet pulls
-// a block it didn't actually need).
+// This is a simple 256-bit Bloom filter with four salted hash positions,
+// not a BIP-158 Golomb-coded set. Saturation is substantial at 100 elements
+// (approximately 39% false positives under the usual ideal-hash model).
+// It is an experimental hint, not authenticated light-client verification.
 type CompactFilter struct {
 	Height uint64
 	Bits   [32]byte // 256 bits

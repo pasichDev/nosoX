@@ -28,8 +28,8 @@ import (
 
 const (
 	borromeanVersion uint8 = 2 // distinguishes the proof from SimpleRangeProof(v=1)
-	rangeBits             = 64
-	orProofSize           = 33 + 33 + 32 + 32 + 32 + 32 // T0, T1, e0, e1, s0, s1
+	rangeBits              = 64
+	orProofSize            = 33 + 33 + 32 + 32 + 32 + 32 // T0, T1, e0, e1, s0, s1
 )
 
 // ProveRangeBorromean builds a Borromean range proof for value v with the
@@ -42,6 +42,14 @@ func ProveRangeBorromean(commit [33]byte, blinding []byte, value int64) ([]byte,
 	if len(blinding) != 32 {
 		return nil, errors.New("rangeproof: blinding must be 32 bytes")
 	}
+	want, err := PedersenCommit(value, blinding)
+	if err != nil {
+		return nil, err
+	}
+	if want != commit || !ValidPublicPoint(commit) {
+		return nil, errors.New("rangeproof: commitment does not match opening")
+	}
+
 	curve := Curve()
 	n := curve.Params().N
 
@@ -105,7 +113,7 @@ func ProveRangeBorromean(commit [33]byte, blinding []byte, value int64) ([]byte,
 // range proof binding `commit` to a non-negative 64-bit value.
 func VerifyRangeBorromean(commit [33]byte, proof []byte) bool {
 	expected := 1 + rangeBits*(33+orProofSize)
-	if len(proof) != expected || proof[0] != borromeanVersion {
+	if len(proof) != expected || proof[0] != borromeanVersion || !ValidPublicPoint(commit) {
 		return false
 	}
 	curve := Curve()
@@ -114,6 +122,9 @@ func VerifyRangeBorromean(commit [33]byte, proof []byte) bool {
 	for i := 0; i < rangeBits; i++ {
 		copy(commits[i][:], proof[off:off+33])
 		off += 33
+		if !ValidPublicPoint(commits[i]) {
+			return false
+		}
 	}
 	// Σ C_i · 2^i == commit ?
 	cx, cy := big.NewInt(0), big.NewInt(0)
@@ -161,9 +172,9 @@ func bitOrProve(C [33]byte, r *big.Int, b bool) ([]byte, error) {
 	n := curve.Params().N
 
 	var (
-		T0, T1     [33]byte
-		e0, e1     *big.Int
-		s0, s1     *big.Int
+		T0, T1 [33]byte
+		e0, e1 *big.Int
+		s0, s1 *big.Int
 	)
 	cx, cy, err := decompress(C)
 	if err != nil {
@@ -264,6 +275,10 @@ func bitOrVerify(C [33]byte, body []byte) bool {
 	s0 := new(big.Int).SetBytes(body[130:162])
 	s1 := new(big.Int).SetBytes(body[162:194])
 
+	if !ValidPublicPoint(C) || !ValidPublicPoint(T0) || !ValidPublicPoint(T1) || e0.Cmp(n) >= 0 || e1.Cmp(n) >= 0 || s0.Cmp(n) >= 0 || s1.Cmp(n) >= 0 {
+		return false
+	}
+
 	// Check e == e0 + e1 mod n.
 	want := orChallenge(C, T0, T1)
 	got := new(big.Int).Add(e0, e1)
@@ -312,8 +327,7 @@ func randomScalar() (*big.Int, error) {
 			return nil, err
 		}
 		x := new(big.Int).SetBytes(b[:])
-		x.Mod(x, curve.Params().N)
-		if x.Sign() > 0 {
+		if x.Sign() > 0 && x.Cmp(curve.Params().N) < 0 {
 			return x, nil
 		}
 	}

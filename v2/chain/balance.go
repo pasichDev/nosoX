@@ -2,9 +2,10 @@ package chain
 
 import (
 	"errors"
+	"math"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // ErrBalance is returned when a block's Mimblewimble commitment sum does not
@@ -45,6 +46,9 @@ func (c *Chain) validateBalance(b *types.Block) error {
 			continue // coinbase kernel excess is the value-known coinbase commit
 		}
 		neg = append(neg, b.Kernels[i].Excess)
+		if b.Kernels[i].Fee > math.MaxInt64-totalFee {
+			return ErrBalance
+		}
 		totalFee += b.Kernels[i].Fee
 	}
 

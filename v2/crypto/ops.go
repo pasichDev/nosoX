@@ -21,7 +21,7 @@ func PointSubtract(a, b [33]byte) ([33]byte, error) {
 	// -b: negate Y over the field.
 	by2 := new(big.Int).Sub(curve.Params().P, by)
 	rx, ry := curve.Add(ax, ay, bx, by2)
-	if rx == nil || ry == nil {
+	if rx == nil || ry == nil || (rx.Sign() == 0 && ry.Sign() == 0) {
 		return [33]byte{}, errors.New("crypto: PointSubtract identity")
 	}
 	return compress(rx, ry), nil
@@ -40,7 +40,7 @@ func PointAdd(a, b [33]byte) ([33]byte, error) {
 		return [33]byte{}, err
 	}
 	rx, ry := curve.Add(ax, ay, bx, by)
-	if rx == nil || ry == nil {
+	if rx == nil || ry == nil || (rx.Sign() == 0 && ry.Sign() == 0) {
 		return [33]byte{}, errors.New("crypto: PointAdd identity")
 	}
 	return compress(rx, ry), nil

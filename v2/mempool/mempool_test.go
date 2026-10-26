@@ -3,7 +3,7 @@ package mempool
 import (
 	"testing"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 func mkTx(fee uint64) *types.Transaction {
@@ -13,7 +13,8 @@ func mkTx(fee uint64) *types.Transaction {
 }
 
 func TestSnapshotSortsByFeeDesc(t *testing.T) {
-	p := New(0)
+	// Sorting unit test uses a test-only validator, not admission validation.
+	p := NewValidated(0, func(*types.Transaction) error { return nil })
 	for _, fee := range []uint64{100, 5000, 1, 25, 800} {
 		if _, err := p.Add(mkTx(fee)); err != nil {
 			t.Fatal(err)

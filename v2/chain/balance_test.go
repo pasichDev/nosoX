@@ -4,8 +4,8 @@ import (
 	"crypto/rand"
 	"testing"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // buildSpend constructs a real, balanced 1-in/1-out transaction with the given

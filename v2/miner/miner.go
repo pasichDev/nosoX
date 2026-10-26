@@ -5,17 +5,17 @@ package miner
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/noso-project/noso-go/v2/chain"
-	"github.com/noso-project/noso-go/v2/mempool"
-	"github.com/noso-project/noso-go/v2/pow"
-	"github.com/noso-project/noso-go/v2/types"
-	"github.com/noso-project/noso-go/v2/wallet"
+	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/noso-go/v2/mempool"
+	"github.com/pasichDev/noso-go/v2/pow"
+	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/wallet"
 )
 
 // Miner produces blocks from mempool + current tip.
@@ -35,6 +35,7 @@ type Miner struct {
 	mu     sync.Mutex
 	state  State
 	cancel context.CancelFunc
+	done   chan struct{}
 
 	// Counters for stats.
 	hashCount atomic.Uint64
@@ -49,10 +50,8 @@ const (
 	StateMining
 )
 
-// New constructs an unstarted miner. cb may be nil, in which case the
-// miner still mines but does NOT persist its coinbase blinding factors
-// — meaning it cannot later spend its own rewards. Production callers
-// must pass a non-nil CoinbaseStore.
+// New constructs an unstarted miner. A coinbase keystore is required whenever
+// subsidy is positive; candidate construction fails if reward keys cannot persist.
 func New(c *chain.Chain, p *mempool.Pool, cb *wallet.CoinbaseStore) *Miner {
 	return &Miner{chain: c, pool: p, cbStore: cb}
 }
@@ -81,10 +80,20 @@ func (m *Miner) Start(ctx context.Context, threads int, rewardTo string) error {
 	if threads < 1 {
 		threads = 1
 	}
+	if threads > 16 {
+		return errors.New("miner: thread limit exceeded")
+	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.state == StateMining {
-		m.mu.Unlock()
 		return ErrAlreadyMining
+	}
+	if m.done != nil {
+		select {
+		case <-m.done:
+		default:
+			return ErrAlreadyMining
+		}
 	}
 	innerCtx, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
@@ -92,36 +101,45 @@ func (m *Miner) Start(ctx context.Context, threads int, rewardTo string) error {
 	m.rewardTo = rewardTo
 	m.hashCount.Store(0)
 	m.startedAt = time.Now()
-	m.mu.Unlock()
-
-	go m.run(innerCtx, threads)
+	done := make(chan struct{})
+	m.done = done
+	go func() { defer close(done); m.run(innerCtx, threads) }()
 	return nil
 }
 
 // Stop halts mining.
 func (m *Miner) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.cancel != nil {
 		m.cancel()
 	}
-	m.state = StateIdle
+	done := m.done
+	m.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+	m.mu.Lock()
+	if m.done == done {
+		m.state = StateIdle
+	}
+	m.mu.Unlock()
 }
 
 // Stats returns hashes-per-second since Start was last called.
 type Stats struct {
-	State     State
-	Hashes    uint64
-	Elapsed   time.Duration
-	HashesPS  float64
+	State    State
+	Hashes   uint64
+	Elapsed  time.Duration
+	HashesPS float64
 }
 
 // Stats returns a snapshot of the current activity.
 func (m *Miner) Stats() Stats {
 	m.mu.Lock()
 	state := m.state
+	startedAt := m.startedAt
 	m.mu.Unlock()
-	elapsed := time.Since(m.startedAt)
+	elapsed := time.Since(startedAt)
 	h := m.hashCount.Load()
 	hps := 0.0
 	if elapsed > 0 {
@@ -150,7 +168,7 @@ func (m *Miner) run(ctx context.Context, threads int) {
 		// Race threads to find a nonce.
 		found := m.grindBlock(ctx, candidate, threads)
 		if found == nil {
-			continue // ctx cancelled or new tip arrived
+			continue // context cancelled
 		}
 		// Attempt to add. On error (e.g. someone else got it first), loop.
 		if err := m.chain.AddBlock(found); err != nil {
@@ -177,7 +195,14 @@ func (m *Miner) makeCandidate() (*candidate, error) {
 	if !ok {
 		return nil, errors.New("miner: no tip (genesis missing?)")
 	}
+	if tip.Height == math.MaxUint64 || tip.Timestamp == math.MaxInt64 {
+		return nil, errors.New("miner: exhausted height or timestamp")
+	}
 	height := tip.Height + 1
+	timestamp := time.Now().Unix()
+	if timestamp <= tip.Timestamp {
+		timestamp = tip.Timestamp + 1
+	}
 	difficulty := nextDifficulty(m.chain, tip)
 	prevHash := types.HeaderID(&tip)
 
@@ -189,7 +214,41 @@ func (m *Miner) makeCandidate() (*candidate, error) {
 		kernels  []types.Kernel
 		kernelTx [][32]byte
 	)
+	bodyBytes := 0
+	var selectedFees uint64
+	seenOutputs := map[types.Commitment]bool{}
 	for _, tx := range txs {
+		size := len(types.EncodeTransaction(tx)) + 128*(len(tx.Inputs)+len(tx.Outputs)+len(tx.Kernels))
+		if bodyBytes+size > 4<<20 || len(inputs)+len(tx.Inputs) > 4096 || len(outputs)+len(tx.Outputs) > 4096 || len(kernels)+len(tx.Kernels) > 4096 {
+			continue
+		}
+		if err := m.chain.ValidateTransaction(tx); err != nil {
+			m.pool.Remove(mempool.TxID(tx))
+			continue
+		}
+		var txFees uint64
+		for _, k := range tx.Kernels {
+			txFees += k.Fee
+		}
+		if txFees > math.MaxInt64-selectedFees {
+			continue
+		}
+		conflict := false
+		for _, out := range tx.Outputs {
+			if seenOutputs[out.Commit] {
+				conflict = true
+				break
+			}
+		}
+		if conflict {
+			m.pool.Remove(mempool.TxID(tx))
+			continue
+		}
+		for _, out := range tx.Outputs {
+			seenOutputs[out.Commit] = true
+		}
+		bodyBytes += size
+		selectedFees += txFees
 		inputs = append(inputs, tx.Inputs...)
 		outputs = append(outputs, tx.Outputs...)
 		kernels = append(kernels, tx.Kernels...)
@@ -201,26 +260,18 @@ func (m *Miner) makeCandidate() (*candidate, error) {
 	// blinding scalar so other nodes can verify the miner owned the key.
 	reward := types.BlockReward(height)
 	if reward > 0 {
-		var (
-			commit [33]byte
-			sig    []byte
-			cbRec  wallet.CoinbaseRecord
-		)
-		if m.cbStore != nil {
-			r, err := m.cbStore.Allocate(height, reward)
-			if err == nil {
-				cbRec = r
-				commit = r.Commit
-				if s, err := wallet.SignCoinbase(r); err == nil {
-					sig = s
-				}
-			} else {
-				commit = coinbaseCommit(m.rewardTo, height) // fallback (cannot be spent)
-			}
-		} else {
-			commit = coinbaseCommit(m.rewardTo, height)
+		if m.cbStore == nil {
+			return nil, errors.New("miner: reward keystore required")
 		}
-		_ = cbRec
+		rec, err := m.cbStore.Allocate(height, reward)
+		if err != nil {
+			return nil, err
+		}
+		sig, err := wallet.SignCoinbase(rec)
+		if err != nil {
+			return nil, err
+		}
+		commit := rec.Commit
 		coinbase := types.Output{
 			Features: types.OutputFeaturesCoinbase,
 			Commit:   commit,
@@ -253,16 +304,17 @@ func (m *Miner) makeCandidate() (*candidate, error) {
 	}
 
 	hdr := types.BlockHeader{
-		Version:    types.BlockVersion,
-		Height:     height,
-		Timestamp:  time.Now().Unix(),
-		PrevHash:   prevHash,
-		OutputRoot: merkleOutputs(outputs),
-		KernelRoot: merkleKernels(kernels),
-		Difficulty: difficulty,
+		Version:      types.BlockVersion,
+		Height:       height,
+		Timestamp:    timestamp,
+		PrevHash:     prevHash,
+		NetworkMagic: tip.NetworkMagic,
+		Difficulty:   difficulty,
 	}
+	block := &types.Block{Header: hdr, Inputs: inputs, Outputs: outputs, Kernels: kernels}
+	types.SetBlockRoots(block)
 	return &candidate{
-		block:       &types.Block{Header: hdr, Inputs: inputs, Outputs: outputs, Kernels: kernels},
+		block:       block,
 		kernelsByTx: kernelTx,
 		difficulty:  difficulty,
 	}, nil
@@ -276,32 +328,46 @@ func nextDifficulty(c *chain.Chain, tip types.BlockHeader) uint64 {
 // The first valid nonce wins; the rest are cancelled.
 func (m *Miner) grindBlock(ctx context.Context, c *candidate, threads int) *types.Block {
 	type result struct {
-		nonce uint64
-		ok    bool
+		header types.BlockHeader
+		stale  bool
+		ok     bool
 	}
 	out := make(chan result, threads)
 	mineCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	headerTemplate := c.block.Header
+	var workers sync.WaitGroup
+	defer workers.Wait()
+	defer cancel()
 	for t := 0; t < threads; t++ {
+		workers.Add(1)
 		go func(start uint64) {
-			hdr := c.block.Header
+			defer workers.Done()
+			hdr := headerTemplate
 			for n := start; ; n += uint64(threads) {
 				select {
 				case <-mineCtx.Done():
 					return
 				default:
 				}
+				tip, ok := m.chain.Tip()
+				if !ok || types.HeaderID(&tip) != hdr.PrevHash {
+					out <- result{stale: true}
+					return
+				}
 				hdr.Nonce = n
 				m.hashCount.Add(1)
 				if pow.Verify(&hdr) {
-					out <- result{nonce: n, ok: true}
+					out <- result{header: hdr, ok: true}
 					return
 				}
 				// Refresh timestamp every 1024 attempts so block isn't
 				// stamped at start-of-grind.
 				if n%1024 == 0 {
-					hdr.Timestamp = time.Now().Unix()
+					if now := time.Now().Unix(); now > hdr.Timestamp {
+						hdr.Timestamp = now
+					}
 				}
 			}
 		}(uint64(t))
@@ -312,71 +378,13 @@ func (m *Miner) grindBlock(ctx context.Context, c *candidate, threads int) *type
 		case <-ctx.Done():
 			return nil
 		case r := <-out:
+			if r.stale {
+				return nil
+			}
 			if r.ok {
-				c.block.Header.Nonce = r.nonce
+				c.block.Header = r.header
 				return c.block
 			}
 		}
 	}
-}
-
-func coinbaseCommit(rewardTo string, height uint64) types.Commitment {
-	h := sha256.Sum256([]byte("coinbase:" + rewardTo + ":" + uint64ToStr(height)))
-	var c types.Commitment
-	c[0] = 0x02
-	copy(c[1:], h[:32])
-	return c
-}
-
-func uint64ToStr(n uint64) string {
-	const digits = "0123456789"
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = digits[n%10]
-		n /= 10
-	}
-	return string(buf[i:])
-}
-
-func merkleOutputs(outs []types.Output) types.Hash {
-	leaves := make([]types.Hash, len(outs))
-	for i := range outs {
-		leaves[i] = types.OutputID(&outs[i])
-	}
-	return merkle(leaves)
-}
-
-func merkleKernels(kernels []types.Kernel) types.Hash {
-	leaves := make([]types.Hash, len(kernels))
-	for i := range kernels {
-		leaves[i] = types.KernelID(&kernels[i])
-	}
-	return merkle(leaves)
-}
-
-func merkle(leaves []types.Hash) types.Hash {
-	if len(leaves) == 0 {
-		return types.Hash{}
-	}
-	level := make([]types.Hash, len(leaves))
-	copy(level, leaves)
-	for len(level) > 1 {
-		if len(level)%2 == 1 {
-			level = append(level, level[len(level)-1])
-		}
-		next := make([]types.Hash, len(level)/2)
-		for i := 0; i < len(level); i += 2 {
-			var buf [64]byte
-			copy(buf[:32], level[i][:])
-			copy(buf[32:], level[i+1][:])
-			next[i/2] = sha256.Sum256(buf[:])
-		}
-		level = next
-	}
-	return level[0]
 }

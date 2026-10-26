@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // legacyCommitFor recomputes the genesis-bundler Pedersen commitment

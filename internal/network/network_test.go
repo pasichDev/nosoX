@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noso-project/noso-go/internal/blockchain"
-	"github.com/noso-project/noso-go/internal/crypto"
-	"github.com/noso-project/noso-go/internal/storage"
+	"github.com/pasichDev/noso-go/internal/blockchain"
+	"github.com/pasichDev/noso-go/internal/crypto"
+	"github.com/pasichDev/noso-go/internal/storage"
 )
 
 func newTestService(t *testing.T) *Service {

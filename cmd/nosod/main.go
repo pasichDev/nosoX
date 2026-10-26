@@ -16,13 +16,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/noso-project/noso-go/internal/network"
-	"github.com/noso-project/noso-go/internal/storage"
+	"github.com/pasichDev/noso-go/internal/network"
+	"github.com/pasichDev/noso-go/internal/storage"
 )
 
 func main() {
 	dataRoot := flag.String("data", "NOSODATA", "path to NOSODATA folder")
-	listen := flag.String("listen", "0.0.0.0:8080", "TCP address for the NosoDart-compatible API")
+	listen := flag.String("listen", "127.0.0.1:8080", "TCP address for the NosoDart-compatible API")
 	version := flag.String("version", "0.5.0-go", "version string reported in NODESTATUS")
 	flag.Parse()
 

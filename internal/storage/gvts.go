@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/noso-project/noso-go/internal/types"
+	"github.com/pasichDev/noso-go/internal/types"
 )
 
 // LoadGVTs reads all 100 GVT records from `gvts.psk`. Returns an error if

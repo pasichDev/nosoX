@@ -8,10 +8,10 @@
 //   - Encrypted transports (noise) and stream multiplexing (yamux).
 //   - Topic-based gossip via gossipsub (used by ETH, Filecoin, etc).
 //
-// Two topics:
+// Two versioned JSON topics:
 //
-//	"noso-v2/blocks"  — new full blocks (gob-encoded *types.Block)
-//	"noso-v2/txs"     — new transactions (gob-encoded *types.Transaction)
+//	"noso-v2/blocks"  — new full blocks (JSON-encoded *types.Block)
+//	"noso-v2/txs"     — new transactions (JSON-encoded *types.Transaction)
 //
 // Inbound payloads are validated by the local Chain / Mempool before
 // being re-published; libp2p-gossipsub handles dedup via message IDs.
@@ -20,9 +20,10 @@ package p2p
 import (
 	"bytes"
 	"context"
-	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -34,15 +35,15 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 
-	"github.com/noso-project/noso-go/v2/chain"
-	"github.com/noso-project/noso-go/v2/mempool"
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/noso-go/v2/mempool"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // Topic names. Namespaced by network magic so testnet and mainnet
 // peers don't accidentally cross-talk.
-func topicBlocks(magic uint32) string { return fmt.Sprintf("noso-v2/%08x/blocks", magic) }
-func topicTxs(magic uint32) string    { return fmt.Sprintf("noso-v2/%08x/txs", magic) }
+func topicBlocks(magic uint32) string { return fmt.Sprintf("noso-v2/%08x/blocks-v2", magic) }
+func topicTxs(magic uint32) string    { return fmt.Sprintf("noso-v2/%08x/txs-v2", magic) }
 
 // Libp2pNode is the production replacement for `Node`.
 type Libp2pNode struct {
@@ -51,17 +52,20 @@ type Libp2pNode struct {
 	mempool *mempool.Pool
 	logger  func(string, ...any)
 
-	host    host.Host
-	ps      *pubsub.PubSub
-	tBlk    *pubsub.Topic
-	tTx     *pubsub.Topic
-	sBlk    *pubsub.Subscription
-	sTx     *pubsub.Subscription
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	fetcher reorgFetcher
-	limiter *rateLimiter
+	host      host.Host
+	ps        *pubsub.PubSub
+	tBlk      *pubsub.Topic
+	tTx       *pubsub.Topic
+	sBlk      *pubsub.Subscription
+	sTx       *pubsub.Subscription
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	taskMu    sync.Mutex
+	stopping  bool
+	fetcher   reorgFetcher
+	syncSlots chan struct{}
+	limiter   *rateLimiter
 }
 
 // NewLibp2p creates a libp2p host listening on the given multi-address
@@ -94,22 +98,23 @@ func NewLibp2p(listenAddrs []string, magic uint32, c *chain.Chain, p *mempool.Po
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ps, err := pubsub.NewGossipSub(ctx, h)
+	ps, err := pubsub.NewGossipSub(ctx, h, pubsub.WithMaxMessageSize(maxWireBytes), pubsub.WithValidateQueueSize(8), pubsub.WithValidateThrottle(2), pubsub.WithValidateWorkers(2), pubsub.WithPeerOutboundQueueSize(8))
 	if err != nil {
 		cancel()
 		_ = h.Close()
 		return nil, err
 	}
 	return &Libp2pNode{
-		magic:   magic,
-		chain:   c,
-		mempool: p,
-		host:    h,
-		ps:      ps,
-		limiter: newRateLimiter(),
-		ctx:     ctx,
-		cancel:  cancel,
-		logger:  func(string, ...any) {},
+		magic:     magic,
+		chain:     c,
+		mempool:   p,
+		host:      h,
+		ps:        ps,
+		limiter:   newRateLimiter(),
+		syncSlots: make(chan struct{}, 8),
+		ctx:       ctx,
+		cancel:    cancel,
+		logger:    func(string, ...any) {},
 	}, nil
 }
 
@@ -118,6 +123,44 @@ func (n *Libp2pNode) SetLogger(fn func(string, ...any)) { n.logger = fn }
 
 // Start joins the topics and begins listening for inbound messages.
 func (n *Libp2pNode) Start() error {
+	if err := n.ps.RegisterTopicValidator(topicTxs(n.magic), func(_ context.Context, _ peer.ID, msg *pubsub.Message) bool {
+		tx, err := decodeTxMsg(msg.Data)
+		if err != nil {
+			return false
+		}
+		_, err = n.mempool.Add(tx)
+		if errors.Is(err, mempool.ErrDuplicate) {
+			return n.mempool.Validate(tx) == nil
+		}
+		return err == nil
+	}, pubsub.WithValidatorConcurrency(2)); err != nil {
+		return err
+	}
+	if err := n.ps.RegisterTopicValidator(topicBlocks(n.magic), func(_ context.Context, pid peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+		b, err := decodeBlockMsg(msg.Data)
+		if err != nil {
+			return pubsub.ValidationReject
+		}
+		// An already accepted header binds every body field through consensus roots.
+		// This also allows producers to publish blocks after locally applying them.
+		if stored, ok := n.chain.HeaderByHeight(b.Header.Height); ok && types.HeaderID(&stored) == types.HeaderID(&b.Header) {
+			o, k := types.BlockRoots(b)
+			if o == b.Header.OutputRoot && k == b.Header.KernelRoot {
+				return pubsub.ValidationAccept
+			}
+			return pubsub.ValidationReject
+		}
+		if err = n.chain.ValidateBlock(b); err != nil {
+			if errors.Is(err, chain.ErrStale) {
+				n.tryReorgFetch(pid, b)
+				return pubsub.ValidationIgnore
+			}
+			return pubsub.ValidationReject
+		}
+		return pubsub.ValidationAccept
+	}, pubsub.WithValidatorConcurrency(2)); err != nil {
+		return err
+	}
 	tBlk, err := n.ps.Join(topicBlocks(n.magic))
 	if err != nil {
 		return err
@@ -148,6 +191,9 @@ func (n *Libp2pNode) Start() error {
 
 // Shutdown stops the goroutines and closes the libp2p host.
 func (n *Libp2pNode) Shutdown() error {
+	n.taskMu.Lock()
+	n.stopping = true
+	n.taskMu.Unlock()
 	n.cancel()
 	if n.sBlk != nil {
 		n.sBlk.Cancel()
@@ -263,9 +309,7 @@ func (n *Libp2pNode) consumeTxs() {
 			n.logger("p2p: tx decode: %v", err)
 			continue
 		}
-		if _, err := n.mempool.Add(tx); err != nil {
-			n.logger("p2p: tx rejected: %v", err)
-		}
+		_ = tx // admission occurred in the pre-forward topic validator
 	}
 }
 
@@ -282,34 +326,78 @@ func (n *Libp2pNode) ConnectionState(p peer.ID) network.Connectedness {
 
 // ---- encoding helpers --------------------------------------------------
 
-func encodeBlockMsg(b *types.Block) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(b); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
+const maxWireBytes = 16 << 20
 
+// JSON decoding allocates only as bytes are consumed; unlike gob it cannot
+// request huge slice allocations from attacker supplied element counts.
+func decodeWire(raw []byte, dst any, max int) error {
+	if len(raw) == 0 || len(raw) > max {
+		return errors.New("p2p: payload size")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		return errors.New("p2p: trailing payload")
+	}
+	return nil
+}
+func encodeBlockMsg(b *types.Block) ([]byte, error) { return json.Marshal(b) }
 func decodeBlockMsg(raw []byte) (*types.Block, error) {
 	var b types.Block
-	if err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&b); err != nil {
+	if err := decodeWire(raw, &b, maxWireBytes); err != nil {
+		return nil, err
+	}
+	if err := checkBody(b.Inputs, b.Outputs, b.Kernels); err != nil {
 		return nil, err
 	}
 	return &b, nil
 }
-
-func encodeTxMsg(tx *types.Transaction) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(tx); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
+func encodeTxMsg(tx *types.Transaction) ([]byte, error) { return json.Marshal(tx) }
 func decodeTxMsg(raw []byte) (*types.Transaction, error) {
 	var tx types.Transaction
-	if err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&tx); err != nil {
+	if err := decodeWire(raw, &tx, maxWireBytes); err != nil {
+		return nil, err
+	}
+	if err := checkBody(tx.Inputs, tx.Outputs, tx.Kernels); err != nil {
 		return nil, err
 	}
 	return &tx, nil
+}
+func checkBody(in []types.Input, out []types.Output, k []types.Kernel) error {
+	if len(in) > 10000 || len(out) > 10000 || len(k) > 10000 {
+		return errors.New("p2p: body count limit")
+	}
+	for _, i := range in {
+		if len(i.LegacySig) > 256 || len(i.LegacyAddr) > 256 {
+			return errors.New("p2p: input size limit")
+		}
+	}
+	for _, o := range out {
+		if len(o.RangeProof) > 65536 || len(o.LegacyAddress) > 256 {
+			return errors.New("p2p: output size limit")
+		}
+	}
+	for _, v := range k {
+		if len(v.ExcessSig) > 65 {
+			return errors.New("p2p: signature size limit")
+		}
+	}
+	return nil
+}
+
+// launch serializes task registration with Shutdown so accepted background work
+// is joined before callers close the chain store.
+func (n *Libp2pNode) launch(fn func()) bool {
+	n.taskMu.Lock()
+	defer n.taskMu.Unlock()
+	if n.stopping {
+		return false
+	}
+	n.wg.Add(1)
+	go func() { defer n.wg.Done(); fn() }()
+	return true
 }

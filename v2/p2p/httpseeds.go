@@ -30,6 +30,9 @@ func ParseSeedList(r io.Reader) (valid []string, skipped []string) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
+		if len(valid)+len(skipped) >= 512 {
+			break
+		}
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

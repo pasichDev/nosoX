@@ -3,7 +3,7 @@ package chain
 import (
 	"encoding/binary"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // Store is the persistence backend the Chain delegates to. Two
@@ -22,14 +22,21 @@ type Store interface {
 	BlockByHash(types.Hash) (*types.Block, error)
 	// HasUTXO reports whether the given commitment is currently unspent.
 	HasUTXO(types.Commitment) bool
+	// HasOutput and HasKernel include spent outputs and all prior kernels.
+	HasOutput(types.Commitment) bool
+	HasKernel(types.Hash) bool
 	// UTXOByCommit returns the unspent output for a commitment.
 	UTXOByCommit(types.Commitment) (*types.Output, bool)
 	// UTXOByLegacyAddress returns the legacy output bound to addr.
 	UTXOByLegacyAddress(string) (*types.Output, bool)
-	// WriteBlock appends a new block AT TIP+1, applying its UTXO delta.
+	// WriteBlock appends at TIP+1 after checking parent and cheap delta/index
+	// consistency atomically. It requires prior full Chain consensus validation;
+	// signatures, proofs, economics and PoW are not authorized by Store alone.
 	WriteBlock(*types.Block) error
 	// UndoBlock removes the tip block AND undoes its UTXO delta.
 	UndoBlock() error
+	// ReplaceChain atomically replaces the complete canonical state. Failure leaves it unchanged.
+	ReplaceChain([]*types.Block) error
 	// Save flushes any in-flight state to disk.
 	Save() error
 	// Close releases backend resources (file handles, mmap, etc.).

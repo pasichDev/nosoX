@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
 )
 
 // CoinbaseRecord stores a fresh Pedersen blinding scalar tied to a
@@ -19,14 +19,14 @@ import (
 // spend that output (which requires knowing the blinding factor and
 // thus the kernel-excess secret key).
 type CoinbaseRecord struct {
-	Height   uint64     `json:"h"`
-	Amount   int64      `json:"v"`
-	Blinding [32]byte   `json:"b"`
-	Commit   [33]byte   `json:"c"`
+	Height   uint64   `json:"h"`
+	Amount   int64    `json:"v"`
+	Blinding [32]byte `json:"b"`
+	Commit   [33]byte `json:"c"`
 }
 
 // CoinbaseStore is a simple file-backed log of CoinbaseRecord entries.
-// Writes are appended and fsync'd; reads scan from the start. For a
+// Writes replace a complete JSON snapshot and sync file/directory; reads load it. For a
 // production miner that earns many coinbases this should graduate to a
 // BadgerDB bucket — but the API stays the same.
 type CoinbaseStore struct {
@@ -41,7 +41,7 @@ func OpenCoinbaseStore(path string) (*CoinbaseStore, error) {
 		return nil, err
 	}
 	c := &CoinbaseStore{path: path}
-	raw, err := os.ReadFile(path)
+	raw, err := readBoundedSecret(path)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -49,6 +49,17 @@ func OpenCoinbaseStore(path string) (*CoinbaseStore, error) {
 		if err := json.Unmarshal(raw, &c.all); err != nil {
 			return nil, err
 		}
+	}
+	if len(c.all) > 10000 {
+		return nil, errors.New("coinbase: too many records")
+	}
+	seen := make(map[[33]byte]bool, len(c.all))
+	for _, rec := range c.all {
+		want, err := v2crypto.PedersenCommit(rec.Amount, rec.Blinding[:])
+		if err != nil || want != rec.Commit || !v2crypto.ValidPublicPoint(rec.Commit) || seen[rec.Commit] {
+			return nil, errors.New("coinbase: inconsistent record")
+		}
+		seen[rec.Commit] = true
 	}
 	return c, nil
 }
@@ -75,7 +86,11 @@ func (c *CoinbaseStore) Allocate(height uint64, amount int64) (CoinbaseRecord, e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.all = append(c.all, rec)
-	return rec, c.flushLocked()
+	if err := c.flushLocked(); err != nil {
+		c.all = c.all[:len(c.all)-1]
+		return CoinbaseRecord{}, err
+	}
+	return rec, nil
 }
 
 // Lookup returns the CoinbaseRecord for the given commitment. Used when
@@ -104,15 +119,14 @@ func (c *CoinbaseStore) flushLocked() error {
 	if c.path == "" {
 		return errors.New("coinbase: no store path")
 	}
+	if len(c.all) > 10000 {
+		return errors.New("coinbase: record bound exceeded")
+	}
 	body, err := json.MarshalIndent(c.all, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := c.path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, c.path)
+	return atomicSecretWrite(c.path, body)
 }
 
 // CoinbaseKernelSignHash is the canonical digest the miner signs for a

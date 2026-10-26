@@ -8,7 +8,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // BadgerDB key layout (single shared keyspace, prefix-byte tagged):
@@ -22,11 +22,13 @@ import (
 // All values are gob-encoded for forward compatibility; this is intentional
 // since Noso v2 records contain dynamic-length fields.
 const (
-	kBlock     = byte('b')
-	kHash      = byte('h')
-	kUTXO      = byte('u')
-	kLegacy    = byte('l')
-	kTip       = byte('t')
+	kBlock      = byte('b')
+	kHash       = byte('h')
+	kUTXO       = byte('u')
+	kLegacy     = byte('l')
+	kTip        = byte('t')
+	kOutputSeen = byte('o')
+	kKernelSeen = byte('k')
 )
 
 // BadgerStore implements Store on top of Dgraph's BadgerDB key-value
@@ -40,7 +42,7 @@ type BadgerStore struct {
 func OpenBadger(dir string) (*BadgerStore, error) {
 	opts := badger.DefaultOptions(dir).
 		WithLogger(silentBadgerLogger{}).
-		WithSyncWrites(false). // we explicitly Save() before sensitive exits
+		WithSyncWrites(true). // accepted transactions must survive a process crash
 		WithCompactL0OnClose(true)
 	db, err := badger.Open(opts)
 	if err != nil {
@@ -169,6 +171,13 @@ func (s *BadgerStore) HasUTXO(commit types.Commitment) bool {
 	return err == nil
 }
 
+func (s *BadgerStore) hasSeen(prefix byte, id []byte) bool {
+	err := s.db.View(func(txn *badger.Txn) error { _, err := txn.Get(append([]byte{prefix}, id...)); return err })
+	return err == nil
+}
+func (s *BadgerStore) HasOutput(c types.Commitment) bool { return s.hasSeen(kOutputSeen, c[:]) }
+func (s *BadgerStore) HasKernel(h types.Hash) bool       { return s.hasSeen(kKernelSeen, h[:]) }
+
 // UTXOByCommit returns the unspent output for a commitment.
 func (s *BadgerStore) UTXOByCommit(commit types.Commitment) (*types.Output, bool) {
 	var raw []byte
@@ -215,6 +224,9 @@ func (s *BadgerStore) UTXOByLegacyAddress(addr string) (*types.Output, bool) {
 
 // WriteBlock appends b at tip+1 and applies its UTXO delta.
 func (s *BadgerStore) WriteBlock(b *types.Block) error {
+	if b == nil {
+		return errors.New("badger: nil block")
+	}
 	raw, err := encodeBlock(b)
 	if err != nil {
 		return err
@@ -222,6 +234,82 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 	headerHash := types.HeaderID(&b.Header)
 	height := b.Header.Height
 	return s.db.Update(func(txn *badger.Txn) error {
+		// All preconditions participate in this transaction's read set. A backend
+		// error is not treated as a missing key and cannot authorize a partial delta.
+		exists := func(key []byte) (bool, error) {
+			_, err := txn.Get(key)
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return false, nil
+			}
+			return err == nil, err
+		}
+		item, err := txn.Get([]byte{kTip})
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			if height != 0 || !b.Header.PrevHash.IsZero() {
+				return ErrStale
+			}
+			it := txn.NewIterator(badger.DefaultIteratorOptions)
+			it.Rewind()
+			empty := !it.Valid()
+			it.Close()
+			if !empty {
+				return errors.New("badger: missing tip in nonempty state")
+			}
+		} else if err != nil {
+			return err
+		} else {
+			var tipHeight uint64
+			if err := item.Value(func(raw []byte) error {
+				if len(raw) != 8 {
+					return errors.New("badger: invalid tip height")
+				}
+				tipHeight = bytesToU64(raw)
+				return nil
+			}); err != nil {
+				return err
+			}
+			tipItem, err := txn.Get(heightKey(kBlock, tipHeight))
+			if err != nil {
+				return err
+			}
+			var tip *types.Block
+			if err := tipItem.Value(func(raw []byte) error { var err error; tip, err = decodeBlock(raw); return err }); err != nil {
+				return err
+			}
+			if tip.Header.Height != tipHeight || tipHeight == ^uint64(0) || height != tipHeight+1 || b.Header.PrevHash != types.HeaderID(&tip.Header) {
+				return ErrStale
+			}
+		}
+		for _, key := range [][]byte{heightKey(kBlock, height), append([]byte{kHash}, headerHash[:]...)} {
+			present, err := exists(key)
+			if err != nil {
+				return err
+			}
+			if present {
+				return errors.New("badger: block index already exists")
+			}
+		}
+		spent, err := checkStoreDelta(b, deltaReader{
+			output: func(c types.Commitment) (*types.Output, bool, error) {
+				item, err := txn.Get(append([]byte{kUTXO}, c[:]...))
+				if errors.Is(err, badger.ErrKeyNotFound) {
+					return nil, false, nil
+				}
+				if err != nil {
+					return nil, false, err
+				}
+				var out *types.Output
+				if err := item.Value(func(raw []byte) error { var err error; out, err = decodeOutput(raw); return err }); err != nil {
+					return nil, false, err
+				}
+				return out, true, nil
+			},
+			seenOutput: func(c types.Commitment) (bool, error) { return exists(append([]byte{kOutputSeen}, c[:]...)) },
+			seenKernel: func(id types.Hash) (bool, error) { return exists(append([]byte{kKernelSeen}, id[:]...)) },
+		})
+		if err != nil {
+			return err
+		}
 		// Store block + hash index.
 		if err := txn.Set(heightKey(kBlock, height), raw); err != nil {
 			return err
@@ -233,7 +321,8 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 		for i := range b.Inputs {
 			c := b.Inputs[i].Commit
 			// Drop legacy index if present.
-			if out, found := s.UTXOByCommit(c); found && out.Features == types.OutputFeaturesLegacy {
+			out := spent[i]
+			if out.Features == types.OutputFeaturesLegacy {
 				if err := txn.Delete(append([]byte{kLegacy}, []byte(out.LegacyAddress)...)); err != nil {
 					return err
 				}
@@ -245,6 +334,9 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 		// Add new outputs.
 		for i := range b.Outputs {
 			out := b.Outputs[i]
+			if err := txn.Set(append([]byte{kOutputSeen}, out.Commit[:]...), []byte{1}); err != nil {
+				return err
+			}
 			val, err := encodeOutput(&out)
 			if err != nil {
 				return err
@@ -258,6 +350,12 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 				}
 			}
 		}
+		for _, k := range b.Kernels {
+			id := types.KernelID(&k)
+			if err := txn.Set(append([]byte{kKernelSeen}, id[:]...), []byte{1}); err != nil {
+				return err
+			}
+		}
 		// Bump tip.
 		return txn.Set([]byte{kTip}, u64ToBytes(height))
 	})
@@ -267,64 +365,150 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 // reorgs.
 func (s *BadgerStore) UndoBlock() error {
 	tip, ok := s.Tip()
-	if !ok {
-		return errors.New("badger: cannot undo, store is empty")
+	if !ok || tip.Height == 0 {
+		return errors.New("badger: refuse to undo genesis or empty state")
 	}
-	if tip.Height == 0 {
-		return errors.New("badger: refuse to undo genesis")
+	blocks := make([]*types.Block, 0, tip.Height)
+	for h := uint64(0); h < tip.Height; h++ {
+		b, err := s.BlockAt(h)
+		if err != nil {
+			return err
+		}
+		blocks = append(blocks, b)
 	}
-	b, err := s.BlockAt(tip.Height)
+	return s.ReplaceChain(blocks)
+}
+
+// stateEntries builds the complete derived state using the same memory-store
+// transition as reorg validation. Blocks and all output metadata are preserved.
+func stateEntries(blocks []*types.Block) (map[string][]byte, error) {
+	staged := newMemStore()
+	for _, b := range blocks {
+		if b == nil {
+			return nil, errors.New("badger: nil block")
+		}
+		if err := staged.WriteBlock(b); err != nil {
+			return nil, err
+		}
+	}
+	entries := map[string][]byte{}
+	for _, b := range staged.blocks {
+		raw, err := encodeBlock(b)
+		if err != nil {
+			return nil, err
+		}
+		entries[string(heightKey(kBlock, b.Header.Height))] = raw
+		hash := types.HeaderID(&b.Header)
+		entries[string(append([]byte{kHash}, hash[:]...))] = u64ToBytes(b.Header.Height)
+	}
+	for c := range staged.outputSeen {
+		entries[string(append([]byte{kOutputSeen}, c[:]...))] = []byte{1}
+	}
+	for id := range staged.kernelSeen {
+		entries[string(append([]byte{kKernelSeen}, id[:]...))] = []byte{1}
+	}
+	for c, o := range staged.utxo {
+		raw, err := encodeOutput(&o)
+		if err != nil {
+			return nil, err
+		}
+		entries[string(append([]byte{kUTXO}, c[:]...))] = raw
+	}
+	for addr, c := range staged.legacyIdx {
+		entries[string(append([]byte{kLegacy}, []byte(addr)...))] = append([]byte(nil), c[:]...)
+	}
+	if len(blocks) > 0 {
+		entries[string([]byte{kTip})] = u64ToBytes(blocks[len(blocks)-1].Header.Height)
+	}
+	return entries, nil
+}
+
+// ReplaceChain commits the entire reorg in one Badger transaction. If the
+// transaction exceeds Badger's size limit it fails before commit, leaving the
+// old chain intact; operators must not split this into multiple transactions.
+func (s *BadgerStore) ReplaceChain(blocks []*types.Block) error {
+	entries, err := stateEntries(blocks)
 	if err != nil {
 		return err
 	}
-	headerHash := types.HeaderID(&b.Header)
 	return s.db.Update(func(txn *badger.Txn) error {
-		// Remove the block's outputs from UTXO set.
-		for i := range b.Outputs {
-			out := b.Outputs[i]
-			if err := txn.Delete(append([]byte{kUTXO}, out.Commit[:]...)); err != nil {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		var keys [][]byte
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			key := item.KeyCopy(nil)
+			want, ok := entries[string(key)]
+			if !ok {
+				keys = append(keys, key)
+				continue
+			}
+			same := false
+			if err := item.Value(func(raw []byte) error { same = bytes.Equal(raw, want); return nil }); err != nil {
+				it.Close()
 				return err
 			}
-			if out.Features == types.OutputFeaturesLegacy {
-				if err := txn.Delete(append([]byte{kLegacy}, []byte(out.LegacyAddress)...)); err != nil {
-					return err
-				}
+			if same {
+				delete(entries, string(key))
 			}
 		}
-		// Restore inputs to UTXO set. Each input copy carries enough data
-		// (Features, Commit, LegacyAddr, LegacyAmount) to reconstruct
-		// the output that was spent.
-		for i := range b.Inputs {
-			in := b.Inputs[i]
-			restored := types.Output{
-				Features:      in.Features,
-				Commit:        in.Commit,
-				LegacyAddress: in.LegacyAddr,
-				LegacyAmount:  in.LegacyAmount,
-			}
-			val, err := encodeOutput(&restored)
-			if err != nil {
+		it.Close()
+		for _, key := range keys {
+			if err := txn.Delete(key); err != nil {
 				return err
 			}
-			if err := txn.Set(append([]byte{kUTXO}, in.Commit[:]...), val); err != nil {
+		}
+
+		for key, val := range entries {
+			if err := txn.Set([]byte(key), val); err != nil {
 				return err
 			}
-			if restored.Features == types.OutputFeaturesLegacy {
-				if err := txn.Set(append([]byte{kLegacy}, []byte(restored.LegacyAddress)...), append([]byte(nil), restored.Commit[:]...)); err != nil {
-					return err
-				}
-			}
 		}
-		// Drop the block + hash index.
-		if err := txn.Delete(heightKey(kBlock, tip.Height)); err != nil {
-			return err
-		}
-		if err := txn.Delete(append([]byte{kHash}, headerHash[:]...)); err != nil {
-			return err
-		}
-		// Bump tip backwards.
-		return txn.Set([]byte{kTip}, u64ToBytes(tip.Height-1))
+		return nil
 	})
+}
+
+func (s *BadgerStore) verifyState(blocks []*types.Block) error {
+	entries, err := stateEntries(blocks)
+	if err != nil {
+		return err
+	}
+	return s.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		count := 0
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			want, ok := entries[string(item.Key())]
+			if !ok {
+				return errors.New("badger: unexpected persisted state key")
+			}
+			if err := item.Value(func(raw []byte) error {
+				if !bytes.Equal(raw, want) {
+					return errors.New("badger: persisted state differs from verified history")
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			count++
+		}
+		if count != len(entries) {
+			return errors.New("badger: missing persisted state key")
+		}
+		return nil
+	})
+}
+
+func (s *BadgerStore) isEmpty() (bool, error) {
+	empty := true
+	err := s.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		it.Rewind()
+		empty = !it.Valid()
+		return nil
+	})
+	return empty, err
 }
 
 // silentBadgerLogger swallows BadgerDB's chatty info-level output.

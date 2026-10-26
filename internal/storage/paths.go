@@ -31,25 +31,25 @@ import (
 
 // Layout owns the resolved absolute paths the rest of the package uses.
 type Layout struct {
-	Root          string // NOSODATA root
-	BlocksDir     string // NOSODATA/BLOCKS
-	BlocksDB      string // NOSODATA/BLOCKS/DB/blocks_db.nos
-	LogsDir       string // NOSODATA/LOGS
-	UpdatesDir    string // NOSODATA/UPDATES
-	SumMarksDir   string // NOSODATA/SUMMARKS
-	RPCBakDir     string // NOSODATA/SUMMARKS/RPC
-	GVTSMarksDir  string // NOSODATA/SUMMARKS/GVTS
-	Wallet        string // NOSODATA/wallet.pkw
-	WalletBak     string // NOSODATA/wallet.pkw.bak
-	Summary       string // NOSODATA/sumary.psk
-	SummaryZip    string // NOSODATA/sumary.zip
-	Headers       string // NOSODATA/blchhead.nos
-	HeadersZip    string // NOSODATA/blchhead.zip
-	PSOs          string // NOSODATA/psos.dat
-	GVTs          string // NOSODATA/gvts.psk
-	Masternodes   string // NOSODATA/masternodes.txt
-	NosoCFG       string // NOSODATA/nosocfg.psk
-	AdvOpt        string // NOSODATA/advopt.txt
+	Root         string // NOSODATA root
+	BlocksDir    string // NOSODATA/BLOCKS
+	BlocksDB     string // NOSODATA/BLOCKS/DB/blocks_db.nos
+	LogsDir      string // NOSODATA/LOGS
+	UpdatesDir   string // NOSODATA/UPDATES
+	SumMarksDir  string // NOSODATA/SUMMARKS
+	RPCBakDir    string // NOSODATA/SUMMARKS/RPC
+	GVTSMarksDir string // NOSODATA/SUMMARKS/GVTS
+	Wallet       string // NOSODATA/wallet.pkw
+	WalletBak    string // NOSODATA/wallet.pkw.bak
+	Summary      string // NOSODATA/sumary.psk
+	SummaryZip   string // NOSODATA/sumary.zip
+	Headers      string // NOSODATA/blchhead.nos
+	HeadersZip   string // NOSODATA/blchhead.zip
+	PSOs         string // NOSODATA/psos.dat
+	GVTs         string // NOSODATA/gvts.psk
+	Masternodes  string // NOSODATA/masternodes.txt
+	NosoCFG      string // NOSODATA/nosocfg.psk
+	AdvOpt       string // NOSODATA/advopt.txt
 }
 
 // NewLayout builds a Layout rooted at root. Pass an absolute path or

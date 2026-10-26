@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/noso-project/noso-go/internal/crypto"
-	"github.com/noso-project/noso-go/internal/types"
+	"github.com/pasichDev/noso-go/internal/crypto"
+	"github.com/pasichDev/noso-go/internal/types"
 )
 
 // NewTransferOrder builds and signs a TRFR-type Order ready to submit to a
@@ -33,6 +33,10 @@ type Sender struct {
 // NewTransferOrder constructs a TRFR order. `block` is the current chain
 // tip — used as a salt in TrfrID, matching the Dart behavior.
 func NewTransferOrder(s Sender, receiver string, amount int64, message string, timestamp int64, block int64) (*types.Order, error) {
+	addr, err := crypto.AddressFromPublicKey(s.PublicKey, crypto.AddressTypeRegular)
+	if err != nil || addr != s.Hash || amount <= 0 || timestamp < 0 || block < 0 || block > 2147483647 {
+		return nil, errors.New("blockchain: invalid sender or transfer parameters")
+	}
 	if !crypto.IsValidAddress(receiver) {
 		return nil, fmt.Errorf("blockchain.NewTransferOrder: invalid receiver %q", receiver)
 	}
@@ -125,6 +129,13 @@ func NewCustomOrder(s Sender, alias string, timestamp int64, block int64) (*type
 // if the signature on the canonical sign-input verifies against the
 // claimed public key.
 func VerifyOrder(o *types.Order) bool {
+	if o == nil {
+		return false
+	}
+	addr, err := crypto.AddressFromPublicKey(o.Sender, crypto.AddressTypeRegular)
+	if err != nil || addr != o.Address {
+		return false
+	}
 	tsStr := strconv.FormatInt(o.TimeStamp, 10)
 	amtStr := strconv.FormatInt(o.AmmountTrf, 10)
 	feeStr := strconv.FormatInt(o.AmmountFee, 10)

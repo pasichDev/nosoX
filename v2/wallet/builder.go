@@ -9,12 +9,12 @@
 //   - Per-output blinding factors are sampled inside the builder; the
 //     caller never sees them. The sum of input blindings minus output
 //     blindings becomes the kernel-excess scalar.
-//   - Schnorr signatures on the kernel use the constant-time path
-//     (SchnorrSignConstantTime via SchnorrSign).
+//   - Schnorr signatures use the project scalar-based path, which does not
+//     establish constant-time execution.
 //
 // This file is the integration point between the Slatepack codec
 // (slatepack.go), the legacy claim helpers (wallet.go), and the
-// constant-time crypto primitives in v2/crypto.
+// cryptographic primitives in v2/crypto.
 
 package wallet
 
@@ -27,8 +27,8 @@ import (
 
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // BlindingFactor is a 32-byte scalar used as the Pedersen blinding for

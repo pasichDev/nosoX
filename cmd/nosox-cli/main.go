@@ -1,14 +1,14 @@
 // nosox-cli is the v2 wallet and command-line client.
 //
-//   nosox-cli wallet new <path>             create encrypted wallet
-//   nosox-cli wallet import <path> <v1.pkw> import legacy keys
-//   nosox-cli wallet legacy <path>          list claimable legacy addresses
-//   nosox-cli balance <node-rpc> <legacy>   show legacy balance on chain
-//   nosox-cli tip <node-rpc>                show chain tip
-//   nosox-cli mine start <node-rpc> <threads> <reward>
-//   nosox-cli mine stop <node-rpc>
-//   nosox-cli mine stats <node-rpc>
-//   nosox-cli genesis <v1-sumary.psk>       summarize a candidate genesis
+//	nosox-cli wallet new <path>             create encrypted wallet
+//	nosox-cli wallet import <path> <v1.pkw> import legacy keys
+//	nosox-cli wallet legacy <path>          list claimable legacy addresses
+//	nosox-cli balance <node-rpc> <legacy>   show legacy balance on chain
+//	nosox-cli tip <node-rpc>                show chain tip
+//	nosox-cli mine start <node-rpc> <threads> <reward>
+//	nosox-cli mine stop <node-rpc>
+//	nosox-cli mine stats <node-rpc>
+//	nosox-cli genesis <v1-sumary.psk>       summarize a candidate genesis
 package main
 
 import (
@@ -22,8 +22,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/noso-project/noso-go/v2/genesis"
-	"github.com/noso-project/noso-go/v2/wallet"
+	"github.com/pasichDev/noso-go/v2/genesis"
+	"github.com/pasichDev/noso-go/v2/wallet"
 
 	"golang.org/x/term"
 )
@@ -120,7 +120,7 @@ func walletCmd(args []string) {
 			memo = args[4]
 		}
 		s := wallet.NewOfferSlate(amount, fee, 0, memo)
-		s.SignPartial(wallet.RoleSender, w.Master)
+		check(s.SignPartial(wallet.RoleSender, w.Master))
 		enc, err := s.Encode()
 		check(err)
 		fmt.Println("send the following Slatepack to the recipient:")
@@ -141,7 +141,7 @@ func walletCmd(args []string) {
 		}
 		s.Stage = wallet.StageResponse
 		s.Role = wallet.RoleReceiver
-		s.SignPartial(wallet.RoleReceiver, w.Master)
+		check(s.SignPartial(wallet.RoleReceiver, w.Master))
 		enc, err := s.Encode()
 		check(err)
 		fmt.Println("send the following Slatepack back to the sender:")
@@ -164,7 +164,7 @@ func walletCmd(args []string) {
 			check(fmt.Errorf("partial signatures invalid; aborting"))
 		}
 		s.Stage = wallet.StageFinal
-		s.SignPartial(wallet.RoleSender, w.Master)
+		check(s.SignPartial(wallet.RoleSender, w.Master))
 		// In a complete flow we'd reduce the slate to a types.Transaction
 		// and submit via the node's RPC submitorder. The plumbing for
 		// that conversion is the same code path the network gossiper
@@ -175,7 +175,7 @@ func walletCmd(args []string) {
 			"amount":     s.Amount,
 			"fee":        s.Fee,
 			"part_sigs":  len(s.PartSigs),
-			"finalized":  true,
+			"finalized":  false,
 			"target_rpc": args[3],
 		}
 		pretty(out)

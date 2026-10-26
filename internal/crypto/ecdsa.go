@@ -58,14 +58,20 @@ func encodeKeyPair(priv *ecdsa.PrivateKey) KeyPair {
 // ParsePrivateKey decodes a Base64 private key string into an *ecdsa.PrivateKey
 // with the secp256k1 curve and the public component derived.
 func ParsePrivateKey(b64 string) (*ecdsa.PrivateKey, error) {
+	if len(b64) > 128 {
+		return nil, errors.New("crypto: oversized key")
+	}
 	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) == 0 || len(raw) > 32 {
+	if len(raw) != 32 {
 		return nil, errors.New("crypto.ParsePrivateKey: invalid scalar length")
 	}
 	d := new(big.Int).SetBytes(raw)
+	if d.Sign() <= 0 || d.Cmp(curve().Params().N) >= 0 {
+		return nil, errors.New("crypto.ParsePrivateKey: scalar out of range")
+	}
 	priv := new(ecdsa.PrivateKey)
 	priv.PublicKey.Curve = curve()
 	priv.D = d
@@ -76,6 +82,9 @@ func ParsePrivateKey(b64 string) (*ecdsa.PrivateKey, error) {
 // ParsePublicKey decodes a Base64 public key into an *ecdsa.PublicKey.
 // Accepts the 65-byte uncompressed format. Returns an error for anything else.
 func ParsePublicKey(b64 string) (*ecdsa.PublicKey, error) {
+	if len(b64) > 128 {
+		return nil, errors.New("crypto: oversized key")
+	}
 	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return nil, err
@@ -121,6 +130,9 @@ func SignString(message []byte, privateKeyB64 string) (string, error) {
 // verification failure — matches Pascal `VerifySignedString`, which
 // swallows all exceptions.
 func VerifyString(message []byte, signatureB64, publicKeyB64 string) bool {
+	if len(signatureB64) > 128 {
+		return false
+	}
 	pub, err := ParsePublicKey(publicKeyB64)
 	if err != nil {
 		return false
@@ -130,7 +142,7 @@ func VerifyString(message []byte, signatureB64, publicKeyB64 string) bool {
 		return false
 	}
 	var sig ecdsaSig
-	if _, err := asn1.Unmarshal(der, &sig); err != nil {
+	if rest, err := asn1.Unmarshal(der, &sig); err != nil || len(rest) != 0 || sig.R == nil || sig.S == nil {
 		return false
 	}
 	h := sha1.Sum(message) //nolint:gosec

@@ -28,9 +28,9 @@ const schnorrSigSize = 65
 // public key P = x·G must be derivable; we recompute it here so callers
 // don't pass it twice.
 //
-// Delegates to the constant-time implementation in schnorr_ct.go —
-// production callers automatically get the side-channel-resistant
-// variant. The variable-time body below is retained as
+// Delegates to the scalar-based implementation in schnorr_ct.go.
+// That implementation does not guarantee constant-time execution.
+// The alternate body below is retained as
 // `schnorrSignVarTime` for cross-validation tests.
 func SchnorrSign(x []byte, msg []byte) ([]byte, error) {
 	return SchnorrSignConstantTime(x, msg)
@@ -87,12 +87,15 @@ func schnorrSignVarTime(x []byte, msg []byte) ([]byte, error) {
 // SchnorrVerify reports whether sig is a valid Schnorr signature over msg
 // by the public key pub.
 func SchnorrVerify(pub [33]byte, msg []byte, sig []byte) bool {
-	if len(sig) != schnorrSigSize {
+	if len(sig) != schnorrSigSize || !ValidPublicPoint(pub) {
 		return false
 	}
 	curve := Curve()
 	var R [33]byte
 	copy(R[:], sig[:33])
+	if !ValidPublicPoint(R) {
+		return false
+	}
 	s := new(big.Int).SetBytes(sig[33:])
 	if s.Sign() <= 0 || s.Cmp(curve.Params().N) >= 0 {
 		return false
@@ -124,6 +127,10 @@ func PublicFromScalar(x []byte) ([33]byte, error) {
 		return [33]byte{}, errors.New("schnorr: bad scalar length")
 	}
 	curve := Curve()
+	xi := new(big.Int).SetBytes(x)
+	if xi.Sign() == 0 || xi.Cmp(curve.Params().N) >= 0 {
+		return [33]byte{}, errors.New("schnorr: scalar out of range")
+	}
 	pX, pY := curve.ScalarBaseMult(x)
 	return compress(pX, pY), nil
 }

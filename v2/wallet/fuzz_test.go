@@ -8,6 +8,7 @@ import "testing"
 func FuzzSlatepackDecode(f *testing.F) {
 	// Seed: a known-good slatepack so the fuzzer has somewhere to start.
 	s := NewOfferSlate(1_000_000, 100, 0, "fuzz seed")
+	s.TxID = [16]byte{1, 2, 3, 4} // fixed initial corpus identity
 	good, _ := s.Encode()
 	f.Add(good)
 	f.Add("SLATEPACK1.")

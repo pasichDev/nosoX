@@ -1,6 +1,6 @@
 package types
 
-import "github.com/noso-project/noso-go/internal/codec"
+import "github.com/pasichDev/noso-go/internal/codec"
 
 // SummaryRecordSize is the on-disk size of one TSummaryData record in
 // sumary.psk. Source: `nosounit.pas:18-24`.

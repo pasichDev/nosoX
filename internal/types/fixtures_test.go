@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/noso-project/noso-go/internal/crypto"
+	"github.com/pasichDev/noso-go/internal/crypto"
 )
 
 // These tests exercise the type-level Marshal/Unmarshal code against

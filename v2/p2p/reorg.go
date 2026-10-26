@@ -6,7 +6,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // tryReorgFetch is called when a gossip block arrives whose parent we
@@ -14,10 +14,10 @@ import (
 // back to our current height, then either apply them via ReorgTo (if
 // the fork is heavier) or drop them.
 func (n *Libp2pNode) tryReorgFetch(from peer.ID, head *types.Block) {
-	if !n.fetcher.tryLock() {
+	if head == nil || head.Header.Height == 0 || !n.fetcher.tryLock() {
 		return // someone else is already fetching
 	}
-	go func() {
+	if !n.launch(func() {
 		defer n.fetcher.unlock()
 		ctx, cancel := context.WithTimeout(n.ctx, 30*time.Second)
 		defer cancel()
@@ -48,5 +48,7 @@ func (n *Libp2pNode) tryReorgFetch(from peer.ID, head *types.Block) {
 		if err := n.chain.ReorgTo(blocks); err != nil {
 			n.logger("p2p: ReorgTo: %v", err)
 		}
-	}()
+	}) {
+		n.fetcher.unlock()
+	}
 }

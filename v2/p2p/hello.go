@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/gob"
+	"encoding/json"
 	"io"
 	"time"
 
@@ -12,13 +12,13 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // ProtocolHello is the libp2p protocol ID for the application-level
 // status handshake. A fresh node uses it on every new peer connection
 // to discover whether the peer is ahead and a cold-sync should start.
-const ProtocolHello protocol.ID = "/noso/hello/1"
+const ProtocolHello protocol.ID = "/noso/hello/2"
 
 // Status is what the hello handshake exchanges.
 type Status struct {
@@ -41,7 +41,7 @@ func (n *Libp2pNode) installHelloHandler() {
 	n.host.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
 			pid := conn.RemotePeer()
-			go n.helloAndCatchUp(pid)
+			n.launch(func() { n.helloAndCatchUp(pid) })
 		},
 	})
 }
@@ -58,7 +58,9 @@ func (n *Libp2pNode) helloAndCatchUp(pid peer.ID) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(10 * time.Second))
 	// Send our status (optional; the peer's handler ignores the body).
-	_ = writeFrame(s, encodeStatus(n.localStatus()))
+	if err := writeFrame(s, encodeStatus(n.localStatus())); err != nil {
+		return
+	}
 	// Read peer's status.
 	raw, err := readFrame(s, 1024)
 	if err != nil {
@@ -68,7 +70,7 @@ func (n *Libp2pNode) helloAndCatchUp(pid peer.ID) {
 	if err != nil {
 		return
 	}
-	if st.NetworkMagic != n.magic {
+	if st.NetworkMagic != n.magic || st.Version != types.BlockVersion {
 		return // wrong network — silently drop
 	}
 	if st.Height > 0 {
@@ -88,13 +90,13 @@ func (n *Libp2pNode) localStatus() Status {
 
 func encodeStatus(st Status) []byte {
 	var buf bytes.Buffer
-	_ = gob.NewEncoder(&buf).Encode(st)
+	_ = json.NewEncoder(&buf).Encode(st)
 	return buf.Bytes()
 }
 
 func decodeStatus(raw []byte) (Status, error) {
 	var st Status
-	err := gob.NewDecoder(bytes.NewReader(raw)).Decode(&st)
+	err := decodeWire(raw, &st, 1024)
 	return st, err
 }
 

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/noso-project/noso-go/v2/pow"
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/pow"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // mineAt builds and mines a block at the requested difficulty. Caller
@@ -23,13 +23,15 @@ func mineAt(parent types.Hash, height uint64, difficulty uint64) *types.Block {
 		PrevHash:   parent,
 		Difficulty: difficulty,
 	}
+	b := &types.Block{Header: hdr}
+	sealFixture(b)
 	for n := uint64(0); n < 1<<22; n++ {
-		hdr.Nonce = n
-		if pow.Verify(&hdr) {
+		b.Header.Nonce = n
+		if pow.Verify(&b.Header) {
 			break
 		}
 	}
-	return &types.Block{Header: hdr}
+	return b
 }
 
 // baseTime anchors block timestamps so the difficulty algorithm sees a
@@ -157,7 +159,7 @@ func TestScenarioDeepReorg(t *testing.T) {
 	anchorHash := types.HeaderID(&anchor)
 	fork := make([]*types.Block, 0, 15)
 	parent = anchorHash
-	for h := uint64(6); h <= 20; h++ {
+	for h := uint64(6); h <= 21; h++ {
 		// Mutate timestamp to ensure fork hashes differ from main chain.
 		hdr := types.BlockHeader{
 			Version:    types.BlockVersion,
@@ -166,13 +168,17 @@ func TestScenarioDeepReorg(t *testing.T) {
 			PrevHash:   parent,
 			Difficulty: 1,
 		}
+		fixture := &types.Block{Header: hdr}
+		sealFixture(fixture)
+		hdr = fixture.Header
 		for n := uint64(0); n < 64; n++ {
 			hdr.Nonce = n
 			if pow.Verify(&hdr) {
 				break
 			}
 		}
-		b := &types.Block{Header: hdr}
+		b := fixture
+		b.Header = hdr
 		fork = append(fork, b)
 		parent = types.HeaderID(&hdr)
 	}
@@ -180,7 +186,7 @@ func TestScenarioDeepReorg(t *testing.T) {
 	if err := c.ReorgTo(fork); err != nil {
 		t.Fatalf("reorg 15-block deep: %v", err)
 	}
-	if c.Height() != 20 {
+	if c.Height() != 21 {
 		t.Fatalf("post-reorg height = %d, want 20", c.Height())
 	}
 	tip, _ := c.Tip()
@@ -223,13 +229,17 @@ func TestScenarioCheckpointSurvivesRewriteAttempt(t *testing.T) {
 			PrevHash:   parent,
 			Difficulty: 1,
 		}
+		fixture := &types.Block{Header: hdr}
+		sealFixture(fixture)
+		hdr = fixture.Header
 		for n := uint64(0); n < 64; n++ {
 			hdr.Nonce = n
 			if pow.Verify(&hdr) {
 				break
 			}
 		}
-		fork = append(fork, &types.Block{Header: hdr})
+		fixture.Header = hdr
+		fork = append(fork, fixture)
 		parent = types.HeaderID(&hdr)
 	}
 	err := c.ReorgTo(fork)

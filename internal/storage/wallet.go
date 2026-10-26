@@ -4,7 +4,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/noso-project/noso-go/internal/types"
+	"github.com/pasichDev/noso-go/internal/types"
 )
 
 // LoadWallet reads every WalletData record from path and returns them in

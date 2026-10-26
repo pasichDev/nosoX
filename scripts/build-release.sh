@@ -25,6 +25,9 @@ set -euo pipefail
 
 VERSION="${1:-dev}"
 shift || true
+if [[ ! "$VERSION" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+  echo "invalid version component" >&2; exit 2
+fi
 
 PLATFORMS=("linux/amd64")
 SIGN=0
@@ -39,6 +42,8 @@ done
 ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
 OUT="$ROOT/release/$VERSION"
 mkdir -p "$OUT"
+cd "$ROOT"
+ARTIFACTS=()
 
 BINS=(nosoxd nosox-cli nosocli nosod)
 
@@ -47,6 +52,7 @@ for plat in "${PLATFORMS[@]}"; do
   arch="${plat#*/}"
   for bin in "${BINS[@]}"; do
     out="$OUT/${bin}-${os}-${arch}"
+    ARTIFACTS+=("${bin}-${os}-${arch}")
     echo "==> $out"
     CGO_ENABLED=0 \
       GOOS="$os" GOARCH="$arch" \
@@ -60,7 +66,7 @@ for plat in "${PLATFORMS[@]}"; do
 done
 
 # SHA256 over every artefact, deterministic order.
-( cd "$OUT" && sha256sum -- $(ls -1 | LC_ALL=C sort | grep -v SHA256SUMS) ) > "$OUT/SHA256SUMS"
+( cd "$OUT" && printf '%s\n' "${ARTIFACTS[@]}" | LC_ALL=C sort | while IFS= read -r artifact; do sha256sum -- "$artifact"; done ) > "$OUT/SHA256SUMS"
 echo "==> $OUT/SHA256SUMS"
 cat "$OUT/SHA256SUMS"
 

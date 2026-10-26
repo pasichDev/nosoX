@@ -7,15 +7,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 
-	"github.com/noso-project/noso-go/v2/chain"
-	"github.com/noso-project/noso-go/v2/genesis"
-	"github.com/noso-project/noso-go/v2/mempool"
-	"github.com/noso-project/noso-go/v2/miner"
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/noso-go/v2/genesis"
+	"github.com/pasichDev/noso-go/v2/mempool"
+	"github.com/pasichDev/noso-go/v2/miner"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // Service bundles the dependencies for the RPC handlers.
@@ -37,8 +40,7 @@ type Service struct {
 
 	// Token enables Bearer auth on every endpoint except /health.
 	// Empty token means "no auth" — only safe when bound to 127.0.0.1.
-	// The daemon logs a loud warning when starting without a token on
-	// a non-loopback bind.
+	// The daemon refuses a non-loopback bind without a token.
 	Token string
 
 	// PublicMethods is the set of JSON-RPC method names that bypass the
@@ -61,14 +63,14 @@ func (s *Service) HTTPHandler() http.Handler {
 // daemon. Methods here can be called without the auth token. Anything
 // that mutates state (startmining, restart, submitorder) is excluded.
 var DefaultPublicMethods = map[string]bool{
-	"tip":               true,
-	"getmainnetinfo":    true,
-	"getblock":          true,
-	"legacybalance":     true,
-	"pending":           true,
-	"minerstats":        true,
-	"genesisinfo":       true,
-	"version":           true,
+	"tip":            true,
+	"getmainnetinfo": true,
+	"getblock":       true,
+	"legacybalance":  true,
+	"pending":        true,
+	"minerstats":     true,
+	"genesisinfo":    true,
+	"version":        true,
 }
 
 // authorize returns true if the request carries a valid token or the
@@ -76,7 +78,10 @@ var DefaultPublicMethods = map[string]bool{
 // so a probing attacker can't time the token.
 func (s *Service) authorize(r *http.Request, method string) bool {
 	if s.Token == "" {
-		return true // dev mode
+		if r.Header.Get("Origin") != "" {
+			return DefaultPublicMethods[strings.ToLower(method)]
+		}
+		return true
 	}
 	if s.PublicMethods != nil && s.PublicMethods[strings.ToLower(method)] {
 		return true
@@ -139,7 +144,17 @@ func (s *Service) jsonRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req jrpcReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.UseNumber()
+	err := dec.Decode(&req)
+	if err == nil {
+		var extra any
+		if dec.Decode(&extra) != io.EOF {
+			err = fmt.Errorf("trailing JSON")
+		}
+	}
+	if err != nil || req.JSONRPC != "2.0" || req.Method == "" {
 		writeJSON(w, http.StatusOK, jrpcResp{JSONRPC: "2.0", ID: req.ID,
 			Error: &jrpcErr{Code: 401, Message: "Invalid JSON request"}})
 		return
@@ -156,20 +171,24 @@ func (s *Service) jsonRPC(w http.ResponseWriter, r *http.Request) {
 	case "tip", "getmainnetinfo":
 		t, ok := s.Chain.Tip()
 		resp.Result = map[string]any{
-			"valid":       ok,
-			"height":      t.Height,
-			"hash":        types.HeaderID(&t).String(),
-			"difficulty":  t.Difficulty,
-			"timestamp":   t.Timestamp,
-			"pending":     s.Mempool.Len(),
+			"valid":      ok,
+			"height":     t.Height,
+			"hash":       types.HeaderID(&t).String(),
+			"difficulty": t.Difficulty,
+			"timestamp":  t.Timestamp,
+			"pending":    s.Mempool.Len(),
 		}
 	case "getblock":
 		if len(req.Params) < 1 {
 			resp.Error = &jrpcErr{Code: 400, Message: "missing param"}
 			break
 		}
-		h, _ := req.Params[0].(float64)
-		hdr, ok := s.Chain.HeaderByHeight(uint64(h))
+		h, err := HeightFromParam(req.Params[0])
+		if err != nil {
+			resp.Error = &jrpcErr{Code: 400, Message: "invalid height"}
+			break
+		}
+		hdr, ok := s.Chain.HeaderByHeight(h)
 		if !ok {
 			resp.Error = &jrpcErr{Code: 404, Message: "block not found"}
 			break
@@ -190,10 +209,10 @@ func (s *Service) jsonRPC(w http.ResponseWriter, r *http.Request) {
 		addr, _ := req.Params[0].(string)
 		bal, ok := s.Chain.LookupLegacyBalance(addr)
 		resp.Result = map[string]any{
-			"address":  addr,
-			"balance":  bal,
-			"claimed":  !ok && bal == 0,
-			"unspent":  ok,
+			"address": addr,
+			"balance": bal,
+			"claimed": !ok && bal == 0,
+			"unspent": ok,
 		}
 	case "pending":
 		resp.Result = s.Mempool.Len()
@@ -205,9 +224,12 @@ func (s *Service) jsonRPC(w http.ResponseWriter, r *http.Request) {
 		threads := 1
 		rewardTo := "noso"
 		if len(req.Params) >= 1 {
-			if n, ok := req.Params[0].(float64); ok {
-				threads = int(n)
+			n, err := HeightFromParam(req.Params[0])
+			if err != nil || n < 1 || n > uint64(runtime.NumCPU()) {
+				resp.Error = &jrpcErr{Code: 400, Message: "invalid thread count"}
+				break
 			}
+			threads = int(n)
 		}
 		if len(req.Params) >= 2 {
 			if r, ok := req.Params[1].(string); ok {
@@ -216,7 +238,8 @@ func (s *Service) jsonRPC(w http.ResponseWriter, r *http.Request) {
 		}
 		minerCtx := s.DaemonContext
 		if minerCtx == nil {
-			minerCtx = context.Background() // safe fallback; never the HTTP request ctx
+			resp.Error = &jrpcErr{Code: 500, Message: "daemon context unavailable"}
+			break
 		}
 		if err := s.Miner.Start(minerCtx, threads, rewardTo); err != nil {
 			resp.Error = &jrpcErr{Code: 500, Message: err.Error()}
@@ -235,14 +258,14 @@ func (s *Service) jsonRPC(w http.ResponseWriter, r *http.Request) {
 		}
 		st := s.Miner.Stats()
 		resp.Result = map[string]any{
-			"state":     int(st.State),
-			"hashes":    st.Hashes,
-			"elapsed":   st.Elapsed.Seconds(),
-			"hashesps":  st.HashesPS,
+			"state":    int(st.State),
+			"hashes":   st.Hashes,
+			"elapsed":  st.Elapsed.Seconds(),
+			"hashesps": st.HashesPS,
 		}
 	case "genesisinfo":
 		// Quick read of canonical genesis stats (re-derived from cfg).
-		stats, err := genesis.Summarize(genesis.Default())
+		stats, err := genesis.Summarize(s.gvtCfgOrDefault())
 		if err != nil {
 			resp.Error = &jrpcErr{Code: 500, Message: err.Error()}
 			break
@@ -286,9 +309,12 @@ func (s *Service) jsonRPC(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		slot := 0
-		if v, ok := req.Params[0].(float64); ok {
-			slot = int(v)
+		v, err := HeightFromParam(req.Params[0])
+		if err != nil || v > 99 {
+			resp.Error = &jrpcErr{Code: 400, Message: "invalid GVT slot"}
+			break
 		}
+		slot = int(v)
 		_, _, gvts, err := genesis.Build(s.gvtCfgOrDefault())
 		if err != nil {
 			resp.Error = &jrpcErr{Code: 500, Message: err.Error()}
@@ -341,7 +367,12 @@ func cors(h http.Handler) http.Handler {
 func HeightFromParam(p interface{}) (uint64, error) {
 	switch v := p.(type) {
 	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v >= math.Exp2(64) || math.Trunc(v) != v {
+			return 0, fmt.Errorf("rpc: invalid height")
+		}
 		return uint64(v), nil
+	case json.Number:
+		return strconv.ParseUint(string(v), 10, 64)
 	case string:
 		return strconv.ParseUint(v, 10, 64)
 	default:

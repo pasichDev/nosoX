@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/noso-project/noso-go/internal/types"
+	"github.com/pasichDev/noso-go/internal/types"
 )
 
 // Block is the in-memory representation of one .blk file: its header plus

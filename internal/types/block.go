@@ -1,6 +1,6 @@
 package types
 
-import "github.com/noso-project/noso-go/internal/codec"
+import "github.com/pasichDev/noso-go/internal/codec"
 
 // BlockHeaderSize is the on-disk size of BlockHeaderData. Source:
 // `nosoblock.pas:25-40`.

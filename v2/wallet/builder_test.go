@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"testing"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	"github.com/pasichDev/noso-go/v2/types"
 
-	v1crypto "github.com/noso-project/noso-go/internal/crypto"
+	v1crypto "github.com/pasichDev/noso-go/internal/crypto"
 )
 
 // helper: synthesize a v1 keypair + address into the wallet's legacy

@@ -12,13 +12,16 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	legacycrypto "github.com/pasichDev/noso-go/internal/crypto"
+	"math"
+	"os"
 	"strconv"
 	"time"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	"github.com/pasichDev/noso-go/v2/types"
 
-	"github.com/noso-project/noso-go/internal/storage"
+	"github.com/pasichDev/noso-go/internal/storage"
 )
 
 // Config controls genesis generation. Sensible defaults are exposed via
@@ -62,7 +65,7 @@ func Default() Config {
 // then hard-coded into every node's binary.
 func Build(cfg Config) (*types.Block, []LegacyOutputInfo, []LegacyGVTInfo, error) {
 	if cfg.Timestamp == 0 {
-		cfg = Default()
+		cfg.Timestamp = Default().Timestamp
 	}
 	if cfg.NetworkMagic == 0 {
 		cfg.NetworkMagic = types.NetworkMagicMainnet
@@ -78,14 +81,27 @@ func Build(cfg Config) (*types.Block, []LegacyOutputInfo, []LegacyGVTInfo, error
 	)
 
 	if cfg.SummaryPath != "" {
+		if _, err := os.Stat(cfg.SummaryPath); err != nil {
+			return nil, nil, nil, fmt.Errorf("genesis: missing snapshot: %w", err)
+		}
 		store, err := storage.NewSummaryStore(cfg.SummaryPath)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("genesis: read summary: %w", err)
 		}
 		recs := store.All()
+		seen := map[string]bool{}
+		var total int64
 		for i := range recs {
 			r := recs[i]
-			if r.Balance <= 0 {
+			if r.Balance < 0 || seen[r.Hash] || !legacycrypto.IsValidAddress(r.Hash) {
+				return nil, nil, nil, fmt.Errorf("genesis: invalid or duplicate snapshot record %d", i)
+			}
+			seen[r.Hash] = true
+			if r.Balance > math.MaxInt64-total {
+				return nil, nil, nil, fmt.Errorf("genesis: snapshot supply overflow")
+			}
+			total += r.Balance
+			if r.Balance == 0 {
 				continue
 			}
 			out, oi := newLegacyOutput(r.Hash, r.Balance)
@@ -99,19 +115,24 @@ func Build(cfg Config) (*types.Block, []LegacyOutputInfo, []LegacyGVTInfo, error
 	// original owner's address. Owners can later redeem (spend for
 	// GVTBaseValue NOSO) or transfer (preserves identity).
 	if cfg.GVTsPath != "" {
+		if _, err := os.Stat(cfg.GVTsPath); err != nil {
+			return nil, nil, nil, fmt.Errorf("genesis: missing GVT snapshot: %w", err)
+		}
 		gvts, err := storage.LoadGVTs(cfg.GVTsPath)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("genesis: read gvts: %w", err)
 		}
+		seenSlots := map[int]bool{}
 		for i := range gvts {
 			g := gvts[i]
 			if g.Owner == "" {
 				continue
 			}
 			slot, err := strconv.Atoi(g.Number)
-			if err != nil || slot < 0 || slot > 99 {
-				continue
+			if err != nil || slot < 0 || slot > 99 || seenSlots[slot] || !legacycrypto.IsValidAddress(g.Owner) {
+				return nil, nil, nil, fmt.Errorf("genesis: invalid or duplicate GVT record %d", i)
 			}
+			seenSlots[slot] = true
 			out, gi := newLegacyGVTOutput(g.Owner, uint8(slot))
 			outputs = append(outputs, out)
 			gvtInfos = append(gvtInfos, gi)
@@ -124,6 +145,7 @@ func Build(cfg Config) (*types.Block, []LegacyOutputInfo, []LegacyGVTInfo, error
 
 	header := types.BlockHeader{
 		Version:           types.BlockVersion,
+		NetworkMagic:      cfg.NetworkMagic,
 		Height:            0,
 		Timestamp:         cfg.Timestamp,
 		PrevHash:          types.Hash{}, // zero
@@ -133,10 +155,9 @@ func Build(cfg Config) (*types.Block, []LegacyOutputInfo, []LegacyGVTInfo, error
 		Difficulty:        cfg.InitialDifficulty,
 		Nonce:             0, // miners grind this when launching
 	}
-	return &types.Block{
-		Header:  header,
-		Outputs: outputs,
-	}, info, gvtInfos, nil
+	block := &types.Block{Header: header, Outputs: outputs}
+	types.SetBlockRoots(block)
+	return block, info, gvtInfos, nil
 }
 
 // LegacyOutputInfo carries the bookkeeping data the wallet needs to
