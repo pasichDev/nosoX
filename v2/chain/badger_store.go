@@ -279,6 +279,9 @@ func (s *BadgerStore) HeightOf(hash types.Hash) (uint64, bool) {
 			return err
 		}
 		return it.Value(func(val []byte) error {
+			if len(val) != 8 {
+				return errors.New("badger: invalid hash index height")
+			}
 			height = bytesToU64(val)
 			return nil
 		})
