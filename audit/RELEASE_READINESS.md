@@ -13,9 +13,9 @@ local devnet tests are evidence, not a blanket LOCAL DEVNET READY designation.
 | Independently reviewed proof system and signing | Blocked | Custom Schnorr/OR range proof; variable-time secret paths |
 | Complete body binding and history uniqueness | Covered locally | Version2 roots/IDs, mutation/replay tests and persisted historical indexes |
 | Atomic small reorg and storage fault recovery | Covered locally | Full-state equality, actual Badger limit failure, abrupt process exit |
-| All legal backend transition capacity/parity | Blocked | One Badger transaction limit versus legal large bodies/suffixes unproven |
-| Bounded long-chain reorg/restart resources | Blocked | Full-history staging and gob replay; prefix preflight only mitigates easy waste |
-| Fee transfer conservation and usable repeated fees | Blocked | Fixed F*H+DevFundPoint repeats forever under historical uniqueness |
+| All legal backend transition capacity/parity | Blocked | Version3 removes aggregate single-transaction cap via fenced batches; individual-record bound argued, worst-case valid proof/delta resource campaign still incomplete |
+| Bounded long-chain reorg/restart resources | Blocked | Suffix-only staging implemented; full startup replay, retained MVCC versions and worst-case suffix memory still need budgets |
+| Fee transfer conservation and usable repeated fees | Covered locally | Version3 context tweak preserves F/recipient and supports repeated fees; off-repo wallet must adopt tweak helper |
 | Fork choice by valid accumulated work | Covered locally | Fully mined shorter-heavier fork; strict ties; exact target-derived work |
 | Timestamp/difficulty design | Partial | Overflow/freeze checks covered; clocks and published-LWMA equivalence unresolved |
 | Independently reconciled migration/genesis | Blocked | Malformed historical accounts and no authenticated issuance reconstruction |
@@ -34,3 +34,7 @@ Independent review: useful as input to a targeted cryptographic/design review.
 **Not a final external release-audit candidate** until the High blockers above
 are resolved and scope/compatibility decisions stabilize. Automated test success
 must never be substituted for an independent audit or supply reconciliation.
+
+Current SP1/SP2/SP3 implementation and exact integrated verification supersede
+previous open-finding descriptions: see SP123_COMPLETION.md. Closing specific
+code defects does not close the broader resource, crypto or migration gates.

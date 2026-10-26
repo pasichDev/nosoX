@@ -3,8 +3,8 @@
 > **RESEARCH ONLY. MAINNET BLOCKED. Not independently audited.**
 > This branch contains defensive hardening of an archived prototype. Passing
 > tests do not establish cryptographic soundness or monetary legitimacy.
-> Legacy claims are disabled. Fee-output collisions, custom cryptography and
-> persistent-state scalability remain release blockers. Do not hold value,
+> Legacy claims are disabled. Custom cryptography, legacy migration and
+> storage lifecycle/resource assurance remain release blockers. Do not hold value,
 > expose this software publicly, or connect it to a public cryptocurrency network.
 
 The Go module is `github.com/pasichDev/noso-go`, aligned with the repository
@@ -15,6 +15,11 @@ The implemented model uses secp256k1 Pedersen commitments, custom Schnorr and
 bit-decomposition OR range proofs, Argon2id PoW, Badger storage and libp2p.
 Ed25519 wallet identities are distinct from output spending scalars. No ASIC,
 GPU, privacy, constant-time or production-readiness guarantee is established.
+
+SP-1/2/3 follow-up implementation and exact current results are in
+[audit/SP123_COMPLETION.md](audit/SP123_COMPLETION.md). It adds context-bound fee
+outputs, suffix-only state staging and durable MVCC publication fences. This
+does not establish independent cryptographic or production resource assurance.
 
 The current internal assessment and exact evidence are in:
 
@@ -50,8 +55,9 @@ go test ./v2/p2p -run 'TestThreeNode|TestPreAdmittedNativeTransactionGossips' -c
 
 ## Compatibility and migration
 
-Version **2** changes header encoding, body commitments, identifiers, validation
-and network codecs. Version-1 databases and histories are rejected. Create a
+Version **3** adds context-bound fee commitments and a new atomic storage schema
+to the earlier header/body-binding changes. Old unfenced databases and earlier
+protocol histories are rejected. Create a
 new disposable local data directory; there is no trusted automatic upgrade.
 No reward, allocation, fee destination or GVT value constant was changed.
 

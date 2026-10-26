@@ -55,3 +55,29 @@ fixtures are retained; the malformed summary fixture now explicitly fails genesi
 validation. A trusted public genesis needs independent economic reconciliation,
 canonical ownership proof, reviewed allocation decisions and separate release
 approval. No production network compatibility or mainnet migration is claimed.
+
+## Subsequent version3 revision (base34f0d0d)
+
+SP1/SP2/SP3 are implemented in this follow-up; the earlier version2 inventory
+above remains historical. See SP123_DESIGN.md and SP123_COMPLETION.md.
+
+- BlockVersion is3. Fees now use `F*H+P_dev+t*G`, with public scalar from the
+  exact network/height/parent/fee context in DEVFUND.md. The spending scalar is
+  `(d_dev+t) mod n`. Both adjusted recipient and final commitment must be valid
+  nonidentity points. Fee amount, recipient, subsidy and allocation constants
+  are unchanged. Historical uniqueness is not bypassed. Off-repo signers must
+  adopt the canonical helper before spending the revised outputs.
+- KernelID/OutputID/body serialization domains retain their v2 format; header
+  version and fee outputs/genesis hash change. JSON transport v2 is retained.
+  This is not compatibility with old consensus, nor a live-network upgrade.
+- Stores persist exact undo records. Routine reorg/undo uses read-through suffix
+  overlays and touched-key publication rather than rebuilding retained history.
+- Badger now uses managed timestamps, chunked staged writes and a durable active
+  fence. Interrupted writes cannot become visible merely when a later timestamp
+  publishes; dirty-key recovery restores the old committed values/tombstones.
+  An empty schema fence precedes genesis staging. Old unfenced DBs are rejected,
+  with no silent migration. Use a separate disposable local data directory.
+- Old MVCC versions are retained (discard timestamp0). Safe reclamation, startup
+  scan cost, large-delta RAM budgets and hardware power-loss behavior remain
+  explicit operational limits. Removing the single-transaction cap is not a
+  claim of unlimited storage or production resource assurance.

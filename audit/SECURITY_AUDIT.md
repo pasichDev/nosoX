@@ -75,7 +75,7 @@ unresolved. No operational exploit or public-network test was required.
 ## NX-006: Failed reorganization could partially rewrite state
 
 - Severity: **Critical**. Classification: CWE-362 / CWE-841.
-- Affected current source: `v2/chain/chain.go:230-302` (`func (c *Chain) ReorgTo`).
+- Affected current source: `v2/chain/chain.go:230-295` (`func (c *Chain) ReorgTo`).
 - Root cause: Old blocks were replayed before removing applied incoming suffix and recovery errors were ignored.
 - Threat model / impact: Peer-supplied invalid suffix or storage failure could corrupt canonical tip and UTXO/index state.
 - Evidence: Baseline ReorgTo ordering inspected; regression validates multiple incoming blocks then rejects a later invalid block and compares all derived state on both stores.
@@ -183,7 +183,7 @@ unresolved. No operational exploit or public-network test was required.
 ## NX-015: Unbounded future timestamp could freeze advancement
 
 - Severity: **High**. Classification: CWE-20.
-- Affected current source: `v2/chain/chain.go:311-358` (`func (c *Chain) validate`).
+- Affected current source: `v2/chain/chain.go:304-351` (`func (c *Chain) validate`).
 - Root cause: TimestampMaxInt64 could be accepted while next timestamp had to advance.
 - Threat model / impact: Untrusted producer could make no representable child timestamp available.
 - Evidence: Deterministic both-backend tests rejectMaxInt64 and now+7201 for the exact drift reason; accept+7200 control.
@@ -204,17 +204,17 @@ unresolved. No operational exploit or public-network test was required.
 - Regression evidence: TestOrderBindsOwnerKey; TestLegacyPrivateScalarBounds; TestLegacyDERStrict; internal/network/security_test.go
 - Verification status: Selected archive/tooling boundaries fixed; complete historical ledger validation remains unavailable. Final executed status is recorded in TEST_REPORT.md.
 
-## NX-017: Deterministic fee outputs collide — OPEN BLOCKER
+## NX-017: Deterministic fee outputs collided — version3 remediation
 
 - Severity: **High**. Classification: CWE-682 / CWE-841.
-- Affected current source: `v2/chain/devfund.go:37-55` (`func ExpectedDevFundCommit`).
+- Affected current source: `v2/chain/devfund.go:66-103` (`func ExpectedDevFundCommit`).
 - Root cause: Fee output equals F*H+fixed public point with no per-block uniqueness domain.
 - Threat model / impact: Equal fee totals reuse commitment; prior code overwrote value, hardened history uniqueness rejects repeat forever, even after spending.
 - Evidence: Independent second pass/SP1 and deterministic ExpectedDevFundCommit source; current rules intentionally reject collision.
 - Confidence: high in stated code behavior; unverified assurance explicitly noted.
 - Fix / disposition: Do not relax uniqueness or change recipient. Requires separately reviewed height/network commitment or accumulator design and spending semantics.
 - Regression evidence: Existing TestExpectedDevFundCommitDeterministic; SP1; repeated-fee full pipeline remains a test gap.
-- Verification status: UNRESOLVED HIGH, blocks public testnet/final audit/mainnet. Final executed status is recorded in TEST_REPORT.md.
+- Verification status: SP1 context-bound blinding implemented; see SP123_COMPLETION.md for current full verification. Broader release gates remain. Final executed status is recorded in TEST_REPORT.md.
 
 ## NX-018: Custom proof construction lacks independent justification — OPEN BLOCKER
 
@@ -252,17 +252,17 @@ unresolved. No operational exploit or public-network test was required.
 - Regression evidence: TestRejectOriginalMalformedSnapshot; TestRejectNegativeAndDuplicateSnapshot; TestDefaultTimestampPreservesSnapshotAndNetwork
 - Verification status: UNRESOLVED HIGH migration trust; parser hardening verified separately. Final executed status is recorded in TEST_REPORT.md.
 
-## NX-021: Atomic reorg resource/capacity bounds remain unproven — OPEN BLOCKER
+## NX-021: Reorg prefix/capacity design — version3 remediation and resource limits
 
 - Severity: **High**. Classification: CWE-400 / CWE-703.
-- Affected current source: `v2/chain/chain.go:230-302` (`func (c *Chain) ReorgTo`).
+- Affected current source: `v2/chain/chain.go:230-295` (`func (c *Chain) ReorgTo`).
 - Root cause: Reorg stages full retained history in RAM; Badger one-transaction cap can reject valid suffixes accepted by memory backend.
 - Threat model / impact: Long-history peer events or large valid suffix may cause resource exhaustion or backend convergence failure.
 - Evidence: Independent SP2/SP3; real oversized Badger fault proves unchanged failure state but not capacity for every consensus-legal transition.
 - Confidence: high in stated code behavior; unverified assurance explicitly noted.
 - Fix / disposition: Cheap whole-suffix structural preflight added. Keep atomic failure; redesign state snapshot/delta staging and prove bounded backend capacity instead of splitting nonatomically.
 - Regression evidence: TestSecurityReorgRejectsMalformedBeforePrefixRead; TestSecurityBadgerOversizeTransactionRollback; maximum valid suffix/long-history resource tests still missing.
-- Verification status: UNRESOLVED HIGH, blocks deployment. Final executed status is recorded in TEST_REPORT.md.
+- Verification status: SP2 suffix overlay and SP3 fenced batches implemented; see SP123_COMPLETION.md. Worst-case suffix memory, retained-version disk/recovery lifecycle and device durability remain operational release gates. Final executed status is recorded in TEST_REPORT.md.
 
 ## Additional remediation and limits
 
@@ -287,6 +287,6 @@ unresolved. No operational exploit or public-network test was required.
 - CLI Slatepack intent signatures are not a complete MW interactive payment
   protocol. No production wallet, anonymity, seed-governance or mainnet guarantee.
 
-No known Critical/High risk is silently declared closed. Open blockers require
+Current SP1/SP2/SP3 disposition is superseded by SP123_COMPLETION.md and the design/review records. Baseline descriptions and earlier verification notes remain evidence. No known Critical/High risk is silently declared closed. Open blockers require
 protocol/cryptographic/storage work beyond the tested patches. See strict release
 gates before any deployment or final external release audit.

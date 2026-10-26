@@ -1,5 +1,8 @@
 # Executed validation and limitations
 
+Current version3 SP1/SP2/SP3 follow-up results are in [SP123_COMPLETION.md](SP123_COMPLETION.md)
+and logs/sp123/. The prior measurements below remain preserved historical evidence.
+
 Baseline:6179eb56d53768a19950f07e9c806fd384572c5d, clean main before branch creation.
 Branch:security/consensus-hardening. Verified code commit:ed5c2eb. Original module:noso-project/noso-go;
 current module:pasichDev/noso-go. No publish/deploy/merge/settings change.

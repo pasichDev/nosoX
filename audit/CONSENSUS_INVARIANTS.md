@@ -73,3 +73,22 @@ Known exceptions to unqualified invariant claims:
   provides a snapshot. Badger sync-write durability still depends on OS/storage.
 - Remote codec bounds do not establish arbitrary long-history resource bounds,
   maximum-size backend parity, complete crash recovery or Sybil resilience.
+
+## Version3 follow-up evidence (supersedes earlier SP1/SP2/SP3 open dispositions)
+
+SP123_COMPLETION.md records the frozen-source full build/vet/test/race and
+combined storage results. SP1 preserves fee value/recipient with a context-bound
+public blinding tweak; SP2 preserves the state equation through exact UndoAt and
+suffix overlay; SP3 preserves atomic visibility through a durable MVCC fence.
+
+New real AddBlock equal-fee/restart/reorg and negative-context regressions cover
+SP1. Large-history count/read guards and exact undo/history tombstones cover the
+SP2 algorithm change. Interrupted stage/genesis/different retry, large aggregate
+publication and exact structural-body storage parity cover SP3. Synthetic large
+storage fixtures are not claimed as cryptographically valid maximum-size blocks.
+
+Normal reorg cost no longer scales with retained prefix length. Full startup,
+trusted import and explicit memory Save still inspect history. Bounded protocol
+suffixes may still be large, and retained MVCC versions/recovery scans lack an
+independently verified lifecycle budget. These limits, cryptographic assurance,
+legacy trust and actual device durability remain release gates.

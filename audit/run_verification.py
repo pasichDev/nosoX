@@ -13,10 +13,12 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('phase', choices=['core', 'race', 'storage', 'coverage'])
+parser.add_argument('--log-dir', default='audit/logs')
+parser.add_argument('--storage-pattern', default='^TestSecurity')
 args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
 os.chdir(root)
-logs = root / 'audit' / 'logs'
+logs = root / args.log_dir
 logs.mkdir(exist_ok=True)
 env = dict(os.environ)
 env.update(GOTOOLCHAIN='go1.27.3', GOMODCACHE='/home/pasich/go/pkg/mod',
@@ -29,7 +31,7 @@ commands = {
           ('regression', ['go', 'test', '-p', '2', './...', '-count=1'])],
  'race': [('race', ['go', 'test', '-race', '-p', '2', './...', '-count=1'])],
  'storage': [('storage', ['go', 'test', '-p', '2', './v2/chain',
-              '-run', '^TestSecurity', '-count=1', '-v'])],
+              '-run', args.storage_pattern, '-count=1', '-v'])],
  'coverage': [('coverage', ['go', 'test', '-p', '2', '-coverprofile=audit/coverage.out',
                            './...', '-count=1']),
               ('coverage-summary', ['go', 'tool', 'cover', '-func=audit/coverage.out'])]

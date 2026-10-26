@@ -1,42 +1,46 @@
-# Dev fund — transparent, fee-funded
+# Transparent fees — experimental protocol version 3
 
-## Decision (2026-06-06)
-Development is funded by **network transaction fees**, openly:
+**Unsafe research implementation. Mainnet remains blocked.** This revision fixes
+SP-1 without changing the fee amount, destination point, subsidy or allocation.
+The previous version's `F*H+P_dev` repeated whenever equal fee totals recurred;
+removing historical uniqueness or overwriting UTXOs is not a permitted fix.
 
-- Every block's total kernel fees are paid to **one public, immutable dev
-  address** (`types.DevFundPubKeyHex` = `099f0f0f…0a97`). The **miner keeps the
-  block subsidy** (50 NOSO, halving). 
-- **No premine** (genesis allocation to the dev fund = 0).
-- The address is hard-coded so the destination can't be redirected, and fully
-  public so every coin reaching it is auditable on-chain. This is the opposite
-  of a hidden dev wallet.
-- A future on-chain messenger fee (deferred) would route here too, with a
-  **dynamic, difficulty-scaled** price (see MESSENGER.md).
+For total public kernel fee F>0, exactly one output must equal:
 
-Private spending key: off-repo in `repo/noso/dev-wallet/` (gitignored).
+```
+t = SHA256("NosoX/devfund-blind/v3" || BE32(network_magic) ||
+           BE64(height) || prev_hash[32] || BE64(F)) mod n
+P_adjusted = P_dev + t*G
+C_fee = F*H + P_adjusted
+```
 
-## Honesty / spec note
-This replaces the earlier "Dev fund: 0 / no devtax" wording. A fee-funded dev
-address IS a (transparent) dev fee — docs and the site must say so plainly. What
-stays true: **no premine, no team allocation, no hidden allocation.**
+`chain.DevFundBlindingTweak(header,F)` and
+`chain.ExpectedDevFundCommit(header,F)` are canonical. The header must have
+version3. The recipient point and final commitment must be canonical and
+nonidentity. Roots, nonce and timestamp are excluded from the tweak so a miner
+can form its body before computing roots and can search nonces without changing
+fee ownership. Parent ancestry binds the trusted genesis and network domain.
+When F=0 there is no fee output. F and all summed fees must fit int64.
 
-## Implementation status — IMPLEMENTED (testnet-grade; audit pending)
-Done in `v2/chain/devfund.go` + miner + consensus, with tests
-(`v2/chain/devfund_test.go`):
+The fixed public recipient remains `types.DevFundPoint()`; its private scalar d
+is not part of this repository. The spending scalar for a particular output is
+`(d+t) mod n`. An off-repository signer must derive t from the exact creation
+header and fee total, use reviewed secret-scalar handling and verify the resulting
+public key/commitment. No production private key was inspected, forged, changed
+or printed. Existing in-repository primitives perform the public derivation;
+this is not a claim of BIP341 compatibility or a complete production wallet.
 
-1. `TotalKernelFee(b)` = Σ kernel.Fee over the block.
-2. Consensus (`validateDevFund`, wired into `Chain.validate`): if F>0 the block
-   MUST carry exactly one `OutputFeaturesDevFund` output whose commit ==
-   `F·H + DevFundPoint` (value-known, recomputable by anyone). If F==0, no
-   dev-fund output is allowed.
-3. The miner adds this output automatically when assembling fee-bearing blocks.
-4. Tests cover: deterministic commit, zero-fee (with/without output),
-   fee-requires-output, correct accepted, wrong-value rejected, duplicate
-   rejected.
+Every native transfer still checks
+`sum(plain outputs)-sum(inputs)+F*H=sum(transaction excesses)`.
+The fee output is independently constrained to the known amount F. Public
+blinding addition changes no value and creates no extra subsidy. The adjusted
+recipient retains the original secret ownership under the curve/hash assumptions.
+Those assumptions and the custom range/signature systems need independent audit.
 
-DONE alongside this: full MW no-inflation balance check
-(`v2/chain/balance.go`, `validateBalance`): Σ plain_out − Σ in + fee·H == Σ
-tx_kernel_excess, with coinbase/dev value-known outputs excluded (verified
-separately) and genesis skipped. Tested for valid spend, inflation rejection,
-coinbase-only, and genesis. Still audit-gated like Bulletproofs.
-- The dev spends the output with the off-repo scalar r_dev (P_dev = r_dev·G).
+`TestSP1ConsecutiveEqualFees` checks real signed/proven consecutive fee blocks,
+wrong-context/inflation rejection, restart and reorg on both stores.
+`TestSP1TweakedRecipientSpendability` checks independent Jacobian arithmetic and a
+synthetic recipient's signed/proven spend; it does not use the production secret.
+See [remediation](../../audit/sp1-remediation.md),
+[combined verification](../../audit/SP123_COMPLETION.md) and
+[protocol changes](../../audit/PROTOCOL_CHANGES.md).

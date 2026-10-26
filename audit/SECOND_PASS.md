@@ -225,3 +225,12 @@ reviewer's original observations with a blanket approval.
 
 The verification pass introduced no new discovery campaign or attack simulation.
 No deployment, publication, merge or repository-setting change occurred.
+
+## Later remediation of SP1/SP2/SP3
+
+After the verification-only pass, the user authorized fixes. The current
+version3 implementation, integrated executed results and remaining limits are
+in SP123_COMPLETION.md. SP123_SECOND_PASS.md records a new independent internal
+review of the combined suffix/fence implementation. The original SP1/SP2/SP3
+observations above remain historical evidence, not the latest code disposition.
+No publication or deployment occurred.

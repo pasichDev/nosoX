@@ -1,0 +1,20 @@
+?   	github.com/pasichDev/noso-go/cmd/nosocli	[no test files]
+?   	github.com/pasichDev/noso-go/cmd/nosod	[no test files]
+?   	github.com/pasichDev/noso-go/cmd/nosox-cli	[no test files]
+ok  	github.com/pasichDev/noso-go/cmd/nosoxd	0.007s
+ok  	github.com/pasichDev/noso-go/internal/blockchain	0.011s
+ok  	github.com/pasichDev/noso-go/internal/codec	0.003s
+ok  	github.com/pasichDev/noso-go/internal/crypto	0.011s
+ok  	github.com/pasichDev/noso-go/internal/network	0.017s
+ok  	github.com/pasichDev/noso-go/internal/storage	0.005s
+ok  	github.com/pasichDev/noso-go/internal/types	0.010s
+ok  	github.com/pasichDev/noso-go/v2/chain	105.770s
+ok  	github.com/pasichDev/noso-go/v2/crypto	0.939s
+ok  	github.com/pasichDev/noso-go/v2/genesis	0.330s
+ok  	github.com/pasichDev/noso-go/v2/mempool	0.002s
+ok  	github.com/pasichDev/noso-go/v2/miner	0.823s
+ok  	github.com/pasichDev/noso-go/v2/p2p	23.090s
+ok  	github.com/pasichDev/noso-go/v2/pow	5.084s
+ok  	github.com/pasichDev/noso-go/v2/rpc	0.012s
+ok  	github.com/pasichDev/noso-go/v2/types	0.010s
+ok  	github.com/pasichDev/noso-go/v2/wallet	0.510s

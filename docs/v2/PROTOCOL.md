@@ -1,4 +1,4 @@
-# Experimental version-2 validation rules
+# Experimental version-3 validation rules
 
 **Unsafe research specification. Mainnet blocked.** This describes this branch,
 not the prior version-1 wire format or an independently reviewed protocol.
@@ -10,7 +10,7 @@ for compatibility. Existing histories are not silently grandfathered.
 `types.EncodeHeader` serializes big-endian Version(uint32), NetworkMagic(uint32),
 Height(uint64), Timestamp(int64), PrevHash(32), OutputRoot(32), KernelRoot(32),
 TotalKernelOffset(33), Difficulty(uint64), Nonce(uint64). HeaderID is SHA-256.
-Version must equal 2, network must match the parent's, offset must be all zero.
+Version must equal 3, network must match the parent's, offset must be all zero.
 Offsets have no supported algebra and are rejected.
 
 `types.BlockRoots` independently hashes complete ordered body lists. OutputRoot
@@ -45,11 +45,11 @@ wallet's height/amount/commit transcript. No claim of cross-network signing
 intent guarantees beyond the enforced header domain is made.
 
 The transfer equation is `sum(plain outputs)-sum(inputs)+fee*H=sum(tx excesses)`.
-Coinbase is separately constrained to the existing subsidy. Fees go to the
-existing transparent dev-fund output `fee*H+DevFundPoint`; they are transfers,
-not new issuance. Every fee sum must fit int64. Repeated fee sums collide in this
-output design: fail-closed rejection is a release blocker, not a reason to relax
-historical uniqueness. There is no burn feature. Issued supply includes all
+Coinbase is separately constrained to the existing subsidy. Fees go to a transparent dev-fund output
+`fee*H+DevFundPoint+t*G`, with the version3 public scalar from DEVFUND.md. The
+amount and recipient are unchanged. Every fee sum must fit int64. Equal fees
+in distinct block contexts no longer force duplicate commitments; historical
+uniqueness remains enforced. There is no burn feature. Issued supply includes all
 locked/unclaimed outputs and the explicitly trusted genesis allocation.
 
 Plain outputs require the version-2 bit-decomposition OR proof, exact shape plus
@@ -68,10 +68,14 @@ variant has not been established. Missing history fails closed.
 
 Forks must have strictly greater sum(floor(2^256/(target+1))) over the divergent
 suffix; equal work does not replace the tip. The effective suffix/depth cap is
-1024, not the previously advertised 5400. Candidates validate in isolated state
-before one atomic backend replacement. Memory snapshots require explicit Save/
-Close; they do not promise per-AddBlock durability. Badger uses synchronous writes.
-Full-history materialization and database transaction limits remain blockers.
+1024, not the previously advertised 5400. Candidates validate against a suffix overlay using complete persisted undo
+records. Retained history is read through rather than copied. Memory publishes
+only the prepared touched-key delta under the Chain mutex. Badger stages chunks
+at a fresh managed timestamp and synchronously publishes one active-state fence;
+readers cannot see partial chunks. Interrupted future writes are restored or
+tombstoned before a later fence publishes. Memory snapshots require explicit
+Save/Close. Full startup replay, disk-version retention, large legal-delta memory
+and hardware power-loss assurance remain operational limitations.
 
 The operator-supplied genesis is a local trust anchor. Reopen checks its hash and
 replays all non-genesis history, then compares derived persistent state. This is

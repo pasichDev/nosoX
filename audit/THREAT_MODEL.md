@@ -67,3 +67,12 @@ supply/claim format; deterministic fee-output collisions; full-history reorg RAM
 and storage transaction capacity/parity; insufficient power-loss/resource/long-
 chain testing; cross-network transaction signing intent and checkpoint governance
 need explicit protocol review. Mainnet is disabled in the daemon.
+
+## Version3 follow-up
+
+The earlier residual SP1/SP2/SP3 design defects now have context-bound fee,
+suffix overlay and fenced managed-storage implementations, verified as recorded
+in SP123_COMPLETION.md. Broader proof-system/secret timing/migration assumptions
+remain. New explicit operational limits include retained MVCC versions and
+abandoned-stage recovery cost. No maximum valid-suffix resource or hardware
+power-loss guarantee follows from successful finite regression tests.
