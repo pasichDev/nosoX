@@ -20,6 +20,10 @@ type Store interface {
 	BlockAt(uint64) (*types.Block, error)
 	// UndoAt returns complete spent outputs for a canonical block, as isolated copies.
 	UndoAt(uint64) ([]types.Output, error)
+	// UndoAtBudget returns only records whose decoded charge fits maxBytes.
+	// Memory checks before cloning; persistent stores must bound encoded record
+	// allocation before decoding, then check the decoded charge before returning.
+	UndoAtBudget(height uint64, maxBytes uint64) ([]types.Output, error)
 	// ReplaceSuffix atomically replaces blocks after ancestor; failure preserves state.
 	// Like WriteBlock it checks raw consistency and requires prior Chain validation.
 	ReplaceSuffix(ancestor uint64, incoming []*types.Block) error

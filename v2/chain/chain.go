@@ -250,6 +250,9 @@ func (c *Chain) ReorgTo(incoming []*types.Block) error {
 	if tip.Height-ancestorHeight > 1024 {
 		return ErrTooDeep
 	}
+	if err := CheckReorgResourceBudget(incoming); err != nil {
+		return err
+	}
 	// Reject malformed suffixes before reading history or staging rollback state.
 	parent := incoming[0].Header.PrevHash
 	height := ancestorHeight
@@ -469,6 +472,9 @@ func (s *memStore) WriteBlock(b *types.Block) error {
 	if b == nil {
 		return errors.New("store: nil block")
 	}
+	if err := bodyBounds(b); err != nil {
+		return err
+	}
 	if b.Header.Height != uint64(len(s.blocks)) {
 		return errors.New("store: noncontiguous height")
 	}
@@ -490,6 +496,9 @@ func (s *memStore) WriteBlock(b *types.Block) error {
 		seenKernel: func(id types.Hash) (bool, error) { return s.HasKernel(id), nil },
 	})
 	if err != nil {
+		return err
+	}
+	if _, err := undoResourceBytes(spent); err != nil {
 		return err
 	}
 	b = cloneBlock(b)

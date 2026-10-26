@@ -40,7 +40,7 @@ func TotalKernelFee(b *types.Block) uint64 {
 // All inputs are public; this helper performs no secret scalar operations.
 func DevFundBlindingTweak(header *types.BlockHeader, totalFee uint64) ([32]byte, error) {
 	if header == nil || header.Version != types.BlockVersion {
-		return [32]byte{}, errDevFund("version-3 header required")
+		return [32]byte{}, errDevFund("current protocol header required")
 	}
 	if totalFee > math.MaxInt64 {
 		return [32]byte{}, errDevFund("fee overflow")

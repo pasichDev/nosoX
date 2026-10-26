@@ -62,3 +62,29 @@ func TestPoolRejectsConflictingInputs(t *testing.T) {
 		t.Fatal("conflicting spend admitted")
 	}
 }
+
+// Structural admission uses a stub only to isolate the byte-accounting boundary;
+// successful admission here makes no claim about ownership validation.
+func TestPoolV4ClaimBudgetAndRemoval(t *testing.T) {
+	p := NewValidated(2, func(*types.Transaction) error { return nil })
+	tx := mkTx(1)
+	tx.Inputs = []types.Input{{LegacyPubKey: string(make([]byte, 88)), LegacyOutputID: types.Hash{1}, LegacyKernelID: types.Hash{2}}}
+	id, err := p.Add(tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.bytes < 64+88 {
+		t.Fatal("claim fields not charged")
+	}
+	p.Remove(id)
+	if p.bytes != 0 {
+		t.Fatalf("byte charge leaked after removal: %d", p.bytes)
+	}
+	tx.Inputs[0].LegacyPubKey += "x"
+	if _, err := p.Add(tx); err == nil {
+		t.Fatal("oversized public key admitted")
+	}
+	if p.bytes != 0 || len(p.entries) != 0 {
+		t.Fatal("failed admission changed pool")
+	}
+}

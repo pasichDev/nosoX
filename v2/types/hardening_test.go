@@ -27,6 +27,9 @@ func TestBodyCommitmentsBindEveryField(t *testing.T) {
 		func(b *Block) { b.Inputs[0].Features++ },
 		func(b *Block) { b.Inputs[0].LegacySig = "s" },
 		func(b *Block) { b.Inputs[0].LegacyAddr = "a" },
+		func(b *Block) { b.Inputs[0].LegacyPubKey = "p" },
+		func(b *Block) { b.Inputs[0].LegacyOutputID[0]++ },
+		func(b *Block) { b.Inputs[0].LegacyKernelID[0]++ },
 		func(b *Block) { b.Inputs[0].LegacyAmount++ },
 		func(b *Block) { b.Outputs[0].Commit[1]++ },
 		func(b *Block) { b.Outputs[0].Features++ },
@@ -44,12 +47,19 @@ func TestBodyCommitmentsBindEveryField(t *testing.T) {
 		func(b *Block) { b.Kernels = append(b.Kernels, b.Kernels[0]) },
 	}
 	a, b := BlockRoots(original())
+	toTx := func(b *Block) *Transaction {
+		return &Transaction{Inputs: b.Inputs, Outputs: b.Outputs, Kernels: b.Kernels}
+	}
+	txID := TransactionID(toTx(original()))
 	for i, mutate := range mutations {
 		block := original()
 		mutate(block)
 		x, y := BlockRoots(block)
 		if a == x && b == y {
 			t.Errorf("mutation %d not bound", i)
+		}
+		if TransactionID(toTx(block)) == txID {
+			t.Errorf("mutation %d not bound by transaction ID", i)
 		}
 	}
 }

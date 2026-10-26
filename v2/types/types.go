@@ -111,14 +111,15 @@ const GVTBaseValue int64 = 70_000_000_000
 type Input struct {
 	Features OutputFeatures
 	Commit   Commitment
-	// LegacySig is present iff Features == OutputFeaturesLegacy. It is
-	// the Base64 DER ECDSA signature produced by the original secp256k1
-	// key over the canonical spend message:
-	//
-	//   sig_input = "NOSOX-LEGACY-SPEND " + legacy_address + " " + commit_hex + " " + block_height_str
-	LegacySig    string
-	LegacyAddr   string // copy of the legacy address that owned this output
-	LegacyAmount int64  // explicit amount (so the kernel can verify balance)
+	// Legacy fields authorize a v4 one-source, one-output, one-kernel claim leg.
+	// LegacySig is canonical Base64 DER ECDSA-SHA256 under the historical
+	// key text, bound to network, genesis, trusted source and linked IDs.
+	LegacySig      string
+	LegacyAddr     string // copy of the legacy address that owned this output
+	LegacyAmount   int64  // explicit amount (so the kernel can verify balance)
+	LegacyPubKey   string // canonical historical Base64 uncompressed public-key text
+	LegacyOutputID Hash   // exact destination Plain output
+	LegacyKernelID Hash   // exact zero-fee, zero-lock LegacyClaim kernel
 }
 
 // Kernel binds inputs and outputs together with a signature over the
@@ -190,7 +191,7 @@ const (
 	NetworkMagicTestnet uint32 = 0x4e4f5854 // "NOXT"
 
 	// Version 3 hard-forks the block-context dev-fund blinding rule.
-	BlockVersion uint32 = 3
+	BlockVersion uint32 = 4
 
 	// TargetBlockTime is the desired interval between blocks.
 	TargetBlockTimeSeconds int64 = 120

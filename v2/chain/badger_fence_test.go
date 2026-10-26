@@ -101,7 +101,7 @@ func TestBadgerFenceRejectsUnfencedSchema(t *testing.T) {
 	}
 }
 
-func TestBadgerFenceMaximumBoundedBodyAppendAndSuffix(t *testing.T) {
+func TestBadgerFencePreviousVersionBodyRejectedAtomic(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenBadger(dir)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestBadgerFenceMaximumBoundedBodyAppendAndSuffix(t *testing.T) {
 	if err := s.WriteBlock(g); err != nil {
 		t.Fatal(err)
 	}
-	// Exactly 8 MiB according to bodyBounds, with its maximum output count.
+	// The former v3 maximum is now rejected by both backends before staging.
 	// Proof bytes are synthetic; cryptographic validity is tested elsewhere.
 	b := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Outputs: make([]types.Output, 10000)}
 	remaining := 8 << 20
@@ -124,29 +124,25 @@ func TestBadgerFenceMaximumBoundedBodyAppendAndSuffix(t *testing.T) {
 		b.Outputs[i].RangeProof = make([]byte, n)
 		remaining -= 128 + n
 	}
-	if err := bodyBounds(b); err != nil {
-		t.Fatal(err)
+	if err := bodyBounds(b); err == nil {
+		t.Fatal("v3 maximum body accepted by v4")
 	}
 	types.SetBlockRoots(b)
-	if err := s.WriteBlock(b); err != nil {
-		t.Fatalf("bounded maximum append: %v", err)
-	}
 	memory := newMemStore()
 	if err := memory.WriteBlock(g); err != nil {
 		t.Fatal(err)
 	}
-	if err := memory.WriteBlock(b); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.verifyState(memory.orderedBlocks()); err != nil {
-		t.Fatal(err)
-	}
-	b.Header.Nonce++
-	if err := s.ReplaceSuffix(0, []*types.Block{b}); err != nil {
-		t.Fatalf("bounded maximum suffix: %v", err)
-	}
-	if err := s.verifyState([]*types.Block{g, b}); err != nil {
-		t.Fatal(err)
+	for _, store := range []Store{memory, s} {
+		if err := store.WriteBlock(b); err == nil {
+			t.Fatal("old maximum appended")
+		}
+		if err := store.ReplaceSuffix(0, []*types.Block{b}); err == nil {
+			t.Fatal("old maximum replaced suffix")
+		}
+		tip, _ := store.Tip()
+		if tip != g.Header {
+			t.Fatal("rejection changed tip")
+		}
 	}
 }
 

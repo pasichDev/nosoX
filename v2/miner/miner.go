@@ -219,7 +219,26 @@ func (m *Miner) makeCandidate() (*candidate, error) {
 	seenOutputs := map[types.Commitment]bool{}
 	for _, tx := range txs {
 		size := len(types.EncodeTransaction(tx)) + 128*(len(tx.Inputs)+len(tx.Outputs)+len(tx.Kernels))
-		if bodyBytes+size > 4<<20 || len(inputs)+len(tx.Inputs) > 4096 || len(outputs)+len(tx.Outputs) > 4096 || len(kernels)+len(tx.Kernels) > 4096 {
+		reserveOutputs, reserveKernels := 0, 0
+		if types.BlockReward(height) > 0 {
+			reserveOutputs++
+			reserveKernels++
+		}
+		proposedFees := selectedFees
+		for _, k := range tx.Kernels {
+			if k.Fee > math.MaxInt64-proposedFees {
+				proposedFees = math.MaxUint64
+				break
+			}
+			proposedFees += k.Fee
+		}
+		if proposedFees > math.MaxInt64 {
+			continue
+		}
+		if proposedFees > 0 {
+			reserveOutputs++
+		}
+		if bodyBytes+size+reserveOutputs*128+reserveKernels*(128+65) > types.MaxBlockBodyBytes || len(inputs)+len(tx.Inputs) > types.MaxBlockInputs || len(outputs)+len(tx.Outputs)+reserveOutputs > types.MaxBlockOutputs || len(kernels)+len(tx.Kernels)+reserveKernels > types.MaxBlockKernels {
 			continue
 		}
 		if err := m.chain.ValidateTransaction(tx); err != nil {

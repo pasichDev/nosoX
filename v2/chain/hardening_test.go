@@ -538,13 +538,19 @@ func TestSecurityBadgerOversizeTransactionAtomicPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := snapshot(t, c)
-	// Deliberately exceed one backend transaction. This is a persistence-only
-	// fixture; consensus-legal body parity has a separate regression.
-	b := mineEasy(types.HeaderID(&g.Header), 1)
-	b.Outputs = make([]types.Output, 40000)
-	for i := range b.Outputs {
-		binary.BigEndian.PutUint64(b.Outputs[i].Commit[1:9], uint64(i))
-		b.Outputs[i].RangeProof = make([]byte, 512)
+	// Exceed one backend transaction using many v4-shaped blocks, rather than
+	// bypassing the per-block envelope with one enormous invalid block.
+	// Proof bytes remain synthetic: this exercises atomic persistence only.
+	blocks := []*types.Block{g}
+	for h := uint64(1); h <= 256; h++ {
+		parent := blocks[len(blocks)-1]
+		b := &types.Block{Header: easyHeader(types.HeaderID(&parent.Header), h), Outputs: make([]types.Output, MaxBlockOutputs)}
+		for i := range b.Outputs {
+			b.Outputs[i].Commit[0] = 2
+			binary.BigEndian.PutUint64(b.Outputs[i].Commit[1:9], h*4+uint64(i))
+			b.Outputs[i].RangeProof = make([]byte, MaxRangeProofBytes)
+		}
+		blocks = append(blocks, b)
 	}
 	s := c.store.(*BadgerStore)
 	injected := errors.New("injected before publication")
@@ -554,17 +560,17 @@ func TestSecurityBadgerOversizeTransactionAtomicPublication(t *testing.T) {
 		}
 		return nil
 	}
-	if err := s.ReplaceChain([]*types.Block{g, b}); !errors.Is(err, injected) {
+	if err := s.ReplaceChain(blocks); !errors.Is(err, injected) {
 		t.Fatalf("expected injected failure: %v", err)
 	}
 	if !reflect.DeepEqual(before, snapshot(t, c)) {
 		t.Fatal("unpublished stage changed active state")
 	}
 	s.fault = nil
-	if err := s.ReplaceChain([]*types.Block{g, b}); err != nil {
+	if err := s.ReplaceChain(blocks); err != nil {
 		t.Fatalf("large replacement: %v", err)
 	}
-	if tip, ok := s.Tip(); !ok || tip.Height != 1 {
+	if tip, ok := s.Tip(); !ok || tip.Height != 256 {
 		t.Fatal("large replacement was not published")
 	}
 

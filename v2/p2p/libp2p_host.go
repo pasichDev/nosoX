@@ -367,24 +367,13 @@ func decodeTxMsg(raw []byte) (*types.Transaction, error) {
 	}
 	return &tx, nil
 }
+
+// checkBody applies the native consensus envelope before admission. Genesis
+// allocations are trusted local inputs, never imported through gossip/sync.
 func checkBody(in []types.Input, out []types.Output, k []types.Kernel) error {
-	if len(in) > 10000 || len(out) > 10000 || len(k) > 10000 {
-		return errors.New("p2p: body count limit")
-	}
-	for _, i := range in {
-		if len(i.LegacySig) > 256 || len(i.LegacyAddr) > 256 {
-			return errors.New("p2p: input size limit")
-		}
-	}
-	for _, o := range out {
-		if len(o.RangeProof) > 65536 || len(o.LegacyAddress) > 256 {
-			return errors.New("p2p: output size limit")
-		}
-	}
-	for _, v := range k {
-		if len(v.ExcessSig) > 65 {
-			return errors.New("p2p: signature size limit")
-		}
+	_, err := chain.BodyResourceBytes(&types.Block{Header: types.BlockHeader{Height: 1}, Inputs: in, Outputs: out, Kernels: k})
+	if err != nil {
+		return fmt.Errorf("p2p: native body envelope: %w", err)
 	}
 	return nil
 }

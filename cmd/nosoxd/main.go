@@ -57,7 +57,11 @@ func main() {
 		rpcTLSCert     = flag.String("rpc-tls-cert", "", "TLS cert file: serve RPC over HTTPS directly from the node (so HTTPS browser apps can connect, no reverse proxy)")
 		rpcTLSKey      = flag.String("rpc-tls-key", "", "TLS key file (required with -rpc-tls-cert)")
 	)
+	maintenanceInterval := flag.Duration("storage-maintenance", 10*time.Minute, "interval for one bounded storage GC attempt; 0 disables")
 	flag.Parse()
+	if *maintenanceInterval < 0 {
+		log.Fatal("storage-maintenance cannot be negative")
+	}
 
 	logger := log.New(os.Stderr, "nosoxd ", log.LstdFlags|log.Lshortfile)
 	if err := validateRPCBind(*rpcAddr, *rpcToken); err != nil {
@@ -125,6 +129,8 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	maintenanceDone := runStorageMaintenance(ctx, *maintenanceInterval, c, func(err error) { logger.Printf("storage maintenance: %v", err) })
+	defer func() { cancel(); <-maintenanceDone }()
 
 	if err := node.Start(); err != nil {
 		logger.Fatalf("p2p start: %v", err)
@@ -200,6 +206,8 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	logger.Printf("shutting down")
+	cancel()
+	<-maintenanceDone
 
 	mn.Stop()
 	ctxShutdown, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)

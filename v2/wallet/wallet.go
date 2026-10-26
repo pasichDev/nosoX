@@ -238,15 +238,16 @@ func Load(path, passphrase string) (*Wallet, error) {
 	return w, nil
 }
 
-// ClaimMessage builds the canonical message the v1 secp256k1 key must
-// sign in order to claim a legacy UTXO. Mirrors what `v2/types.
-// LegacySpendMessage` formats.
+// ClaimMessage preserves the historical prototype message for compatibility.
+// It is not a version4 authorization; use BuildLegacyClaimV4 with explicit
+// network, genesis and destination context.
 func (w *Wallet) ClaimMessage(addr string, commit [33]byte, height uint64) []byte {
 	return []byte(fmt.Sprintf("NOSOX-LEGACY-SPEND %s %x %d", addr, commit[:], height))
 }
 
-// SignLegacyClaim signs `msg` with the legacy secp256k1 key for `addr`.
-// Returns the Base64 DER signature, ready to embed in a v2 transaction.
+// SignLegacyClaim preserves historical SHA1 signing for compatibility tools.
+// Its result is not accepted by version4 consensus. BuildLegacyClaimV4 uses
+// the separately domain-separated SHA256 ownership procedure.
 func (w *Wallet) SignLegacyClaim(addr string, msg []byte) (string, error) {
 	entry, ok := w.Legacy[addr]
 	if !ok {

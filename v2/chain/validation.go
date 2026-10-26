@@ -51,32 +51,8 @@ func validateStructure(b *types.Block) error {
 }
 
 func bodyBounds(b *types.Block) error {
-	if len(b.Inputs) > 10000 || len(b.Outputs) > 10000 || len(b.Kernels) > 10000 {
-		return errors.New("chain: body item limit")
-	}
-	size := 0
-	for _, in := range b.Inputs {
-		if len(in.LegacyAddr) > 256 || len(in.LegacySig) > 256 {
-			return errors.New("chain: input field limit")
-		}
-		size += 128 + len(in.LegacyAddr) + len(in.LegacySig)
-	}
-	for _, o := range b.Outputs {
-		if len(o.RangeProof) > 65536 || len(o.LegacyAddress) > 256 {
-			return errors.New("chain: output field limit")
-		}
-		size += 128 + len(o.RangeProof) + len(o.LegacyAddress)
-	}
-	for _, k := range b.Kernels {
-		if len(k.ExcessSig) > 65 {
-			return errors.New("chain: kernel field limit")
-		}
-		size += 128 + len(k.ExcessSig)
-	}
-	if size > 8<<20 {
-		return errors.New("chain: body size limit")
-	}
-	return nil
+	_, err := BodyResourceBytes(b)
+	return err
 }
 
 func validateGenesis(b *types.Block) error {
@@ -120,6 +96,9 @@ func validateGenesis(b *types.Block) error {
 }
 
 func (c *Chain) verifyHistory(store Store, genesis *types.Block) error {
+	if persistent, ok := store.(*BadgerStore); ok {
+		return c.streamingVerifyHistory(persistent, genesis)
+	}
 	g, err := store.BlockAt(0)
 	if err != nil {
 		return err
@@ -176,6 +155,24 @@ func (c *Chain) ValidateTransaction(tx *types.Transaction) error {
 	if err := bodyBounds(b); err != nil {
 		return err
 	}
+	reserveOutputs, reserveKernels := 0, 0
+	if types.BlockReward(b.Header.Height) > 0 {
+		reserveOutputs++
+		reserveKernels++
+	}
+	if TotalKernelFee(b) > 0 {
+		reserveOutputs++
+	}
+	if len(b.Outputs)+reserveOutputs > types.MaxBlockOutputs || len(b.Kernels)+reserveKernels > types.MaxBlockKernels {
+		return errors.New("chain: transaction leaves no mandatory block capacity")
+	}
+	n, err := BodyResourceBytes(b)
+	if err != nil {
+		return err
+	}
+	if n+uint64(reserveOutputs*128+reserveKernels*(128+65)) > types.MaxBlockBodyBytes {
+		return ErrResourceBudget
+	}
 	return c.validateBody(b, false)
 }
 
@@ -196,11 +193,15 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 		if in.Features != stored.Features || in.LegacyAddr != stored.LegacyAddress || in.LegacyAmount != stored.LegacyAmount {
 			return errors.New("chain: input metadata mismatch")
 		}
-		if stored.Features == types.OutputFeaturesLegacy || stored.Features == types.OutputFeaturesLegacyGVT {
-			return errors.New("chain: legacy ownership procedure unavailable")
-		}
-		if in.LegacySig != "" {
-			return errors.New("chain: unexpected legacy signature")
+		switch stored.Features {
+		case types.OutputFeaturesLegacy, types.OutputFeaturesLegacyGVT:
+			// Explicit v4 claim legs are checked against trusted state below.
+		case types.OutputFeaturesPlain, types.OutputFeaturesCoinbase, types.OutputFeaturesDevFund:
+			if in.LegacySig != "" || in.LegacyPubKey != "" || !in.LegacyOutputID.IsZero() || !in.LegacyKernelID.IsZero() || in.LegacyAddr != "" || in.LegacyAmount != 0 {
+				return errors.New("chain: unexpected legacy authorization")
+			}
+		default:
+			return errors.New("chain: unsupported input feature")
 		}
 		if stored.Features == types.OutputFeaturesCoinbase {
 			start := uint64(0)
@@ -279,6 +280,10 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 			}
 			cbKernels++
 			cbK = k
+		case types.KernelFeaturesLegacyClaim:
+			if k.Fee != 0 || k.LockHeight != 0 || len(k.ExcessSig) != 65 {
+				return errors.New("chain: invalid legacy claim kernel")
+			}
 		case types.KernelFeaturesPlain:
 			if k.LockHeight > b.Header.Height || len(k.ExcessSig) != 65 {
 				return errors.New("chain: invalid kernel authorization")
@@ -299,6 +304,9 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 		if err := validateDevFund(b); err != nil {
 			return err
 		}
+	}
+	if err := c.validateLegacyClaims(b); err != nil {
+		return fmt.Errorf("chain: legacy ownership procedure: %w", err)
 	}
 	for _, k := range b.Kernels {
 		if k.Features == types.KernelFeaturesPlain {

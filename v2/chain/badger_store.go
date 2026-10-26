@@ -2,6 +2,7 @@ package chain
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -36,6 +37,10 @@ const (
 	kKernelSeen = byte('k')
 	kUndo       = byte('d')
 	kActive     = byte('a')
+	// A v4 maximum-depth suffix touches fewer than 44*1024+1 distinct keys;
+	// trusted genesis touches at most 3*10000+4. One recovery stage is bounded
+	// by the larger envelope, not an unbounded union of failed candidates.
+	MaxRecoveryKeys = 64 << 10
 )
 
 // BadgerStore implements Store on top of Dgraph's BadgerDB key-value
@@ -47,6 +52,13 @@ type BadgerStore struct {
 	active atomic.Uint64
 	next   uint64
 	dirty  map[string]struct{}
+	// readersMu makes registering a snapshot atomic with publishing the fence
+	// and advancing Badger's managed discard timestamp. Badger does not track
+	// managed readers for the caller.
+	readersMu   sync.Mutex
+	readers     map[uint64]int
+	discard     uint64
+	maintenance sync.Mutex
 	// fault is test-only; it can fail persistence, never bypass validation.
 	fault func(string) error
 }
@@ -57,12 +69,17 @@ func OpenBadger(dir string) (*BadgerStore, error) {
 		WithLogger(silentBadgerLogger{}).
 		WithSyncWrites(true).       // accepted stages and fences survive a process crash
 		WithDetectConflicts(false). // mutations are serialized by mu
+		WithNumVersionsToKeep(1).
 		WithCompactL0OnClose(true)
+	return openBadger(opts)
+}
+
+func openBadger(opts badger.Options) (*BadgerStore, error) {
 	db, err := badger.OpenManaged(opts)
 	if err != nil {
 		return nil, err
 	}
-	s := &BadgerStore{db: db, dirty: map[string]struct{}{}}
+	s := &BadgerStore{db: db, dirty: map[string]struct{}{}, readers: map[uint64]int{}}
 	txn := db.NewTransactionAt(math.MaxUint64, false)
 	defer txn.Discard()
 	item, err := txn.Get([]byte{kActive})
@@ -111,23 +128,77 @@ func OpenBadger(dir string) (*BadgerStore, error) {
 		s.active.Store(ts)
 	}
 	s.next = db.MaxVersion()
-	// Preserve all old versions (discard timestamp remains zero). In particular,
-	// compaction must retain tombstones from interrupted, unpublished stages.
-	opt := badger.DefaultIteratorOptions
-	opt.AllVersions = true
-	opt.SinceTs = s.active.Load()
-	it := txn.NewIterator(opt)
-	for it.Rewind(); it.Valid(); it.Next() {
-		if it.Item().Version() > s.active.Load() {
-			s.dirty[string(it.Item().KeyCopy(nil))] = struct{}{}
-		}
+	// Recover unpublished keys, including tombstones, before enabling discard.
+	// They are newer than active, so a cutoff at active preserves them and the
+	// newest committed version needed to restore each key on the next publish.
+	s.dirty, err = recoverDirtyKeys(txn, s.active.Load(), MaxRecoveryKeys)
+	if err != nil {
+		txn.Discard()
+		db.Close()
+		return nil, err
 	}
-	it.Close()
+	txn.Discard()
+	s.advanceDiscardLocked()
 	return s, nil
 }
 
+// recoverDirtyKeys visits the latest unpublished version of each user key,
+// including tombstones. Seek(key || 0) moves strictly past all versions of that
+// exact key while retaining extension keys (including an exact key || 0).
+// This avoids walking every version produced by repeated failed restorations.
+func recoverDirtyKeys(txn *badger.Txn, active uint64, limit int) (map[string]struct{}, error) {
+	opt := badger.DefaultIteratorOptions
+	opt.AllVersions = true
+	opt.PrefetchValues = false
+	opt.SinceTs = active
+	it := txn.NewIterator(opt)
+	defer it.Close()
+	dirty := make(map[string]struct{})
+	for it.Rewind(); it.Valid(); {
+		if len(dirty) >= limit {
+			return nil, fmt.Errorf("%w: unpublished recovery key count exceeds %d", ErrResourceBudget, limit)
+		}
+		key := it.Item().KeyCopy(nil)
+		dirty[string(key)] = struct{}{}
+		it.Seek(append(key, 0))
+	}
+	return dirty, nil
+}
+
 // Close releases resources.
-func (s *BadgerStore) Close() error { return s.db.Close() }
+func (s *BadgerStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maintenance.Lock()
+	defer s.maintenance.Unlock()
+	return s.db.Close()
+}
+
+// Reclaim requests one value-log GC attempt. Normal Badger compaction reclaims
+// obsolete LSM versions automatically using the reader-safe cutoff; callers
+// should invoke Reclaim periodically to reclaim value-log files as well.
+// Concurrent attempts are rejected. Cancellation is checked before work and on
+// return: Badger's single synchronous GC attempt cannot be interrupted in flight.
+func (s *BadgerStore) Reclaim(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.maintenance.TryLock() {
+		return badger.ErrRejected
+	}
+	defer s.maintenance.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err := s.db.RunValueLogGC(0.5)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, badger.ErrNoRewrite) {
+		return nil
+	}
+	return err
+}
 
 // Save calls Sync to make sure outstanding writes are on disk.
 func (s *BadgerStore) Save() error { return s.db.Sync() }
@@ -331,6 +402,9 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 	if b == nil {
 		return errors.New("badger: nil block")
 	}
+	if err := bodyBounds(b); err != nil {
+		return err
+	}
 	raw, err := encodeBlock(b)
 	if err != nil {
 		return err
@@ -417,6 +491,9 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 		if err != nil {
 			return err
 		}
+		if _, err := undoResourceBytes(spent); err != nil {
+			return err
+		}
 		undoRaw, err := encodeUndo(spent)
 		if err != nil {
 			return err
@@ -493,14 +570,33 @@ func encodeUndo(outputs []types.Output) ([]byte, error) {
 	return buf.Bytes(), err
 }
 func (s *BadgerStore) UndoAt(h uint64) ([]types.Output, error) {
+	return s.UndoAtBudget(h, MaxUndoRecordBytes)
+}
+
+// UndoAtBudget bounds raw storage before gob decoding, then charges decoded
+// resource bytes before allowing a fork overlay to retain the record.
+func (s *BadgerStore) UndoAtBudget(h uint64, maxBytes uint64) ([]types.Output, error) {
 	var outputs []types.Output
 	err := s.view(func(txn *badger.Txn) error {
 		item, err := txn.Get(heightKey(kUndo, h))
 		if err != nil {
 			return err
 		}
+		if item.ValueSize() > MaxEncodedUndoBytes {
+			return fmt.Errorf("%w: encoded undo record", ErrResourceBudget)
+		}
 		return item.Value(func(raw []byte) error { return decodeRecord(raw, &outputs) })
 	})
+	if err == nil {
+		var size uint64
+		size, err = undoResourceBytes(outputs)
+		if err == nil && size > maxBytes {
+			err = fmt.Errorf("%w: remaining undo budget", ErrResourceBudget)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
 	if outputs == nil && err == nil {
 		outputs = []types.Output{}
 	}
@@ -686,15 +782,51 @@ type stageTxn struct {
 func (t *stageTxn) Set(k, v []byte) error { t.entries[string(k)] = append([]byte{}, v...); return nil }
 func (t *stageTxn) Delete(k []byte) error { t.entries[string(k)] = nil; return nil }
 func (s *BadgerStore) view(fn func(*badger.Txn) error) error {
-	txn := s.db.NewTransactionAt(s.active.Load(), false)
-	defer txn.Discard()
+	txn, release := s.snapshot()
+	defer release()
 	return fn(txn)
+}
+
+// snapshot pins the active timestamp until the transaction has been discarded.
+// Never hold readersMu while doing I/O or invoking a callback: a writer can
+// publish while older readers run, without waiting for them or invalidating them.
+func (s *BadgerStore) snapshot() (*badger.Txn, func()) {
+	s.readersMu.Lock()
+	ts := s.active.Load()
+	s.readers[ts]++
+	txn := s.db.NewTransactionAt(ts, false)
+	s.readersMu.Unlock()
+	return txn, func() {
+		txn.Discard()
+		s.readersMu.Lock()
+		defer s.readersMu.Unlock()
+		s.readers[ts]--
+		if s.readers[ts] == 0 {
+			delete(s.readers, ts)
+		}
+		s.advanceDiscardLocked()
+	}
+}
+
+// Caller holds readersMu, or is still opening this unpublished store. Never
+// advance beyond active: failed stages must retain tombstones and recovery data.
+func (s *BadgerStore) advanceDiscardLocked() {
+	cutoff := s.active.Load()
+	for ts := range s.readers {
+		if ts < cutoff {
+			cutoff = ts
+		}
+	}
+	if cutoff > s.discard {
+		s.db.SetDiscardTs(cutoff)
+		s.discard = cutoff
+	}
 }
 func (s *BadgerStore) mutate(fn func(*stageTxn) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	txn := s.db.NewTransactionAt(s.active.Load(), false)
-	defer txn.Discard()
+	txn, release := s.snapshot()
+	defer release()
 	staged := &stageTxn{Txn: txn, entries: map[string][]byte{}}
 	if err := fn(staged); err != nil {
 		return err
@@ -702,13 +834,22 @@ func (s *BadgerStore) mutate(fn func(*stageTxn) error) error {
 	return s.publish(staged.entries)
 }
 func (s *BadgerStore) publish(entries map[string][]byte) error {
-	// Interrupted stages may contain keys absent from this delta. Restore each
-	// from the last committed snapshot before allowing a later fence past it.
+	// Retire an abandoned stage as a standalone same-state publication BEFORE
+	// touching any new candidate key. Otherwise repeated failed, different
+	// candidates would grow the dirty union without bound. A failed restoration
+	// can only touch keys that were already dirty.
+	if len(s.dirty) != 0 {
+		if err := s.restoreDirty(); err != nil {
+			return err
+		}
+	}
+	return s.publishStage(entries)
+}
+
+func (s *BadgerStore) restoreDirty() error {
+	entries := make(map[string][]byte, len(s.dirty))
 	err := s.view(func(txn *badger.Txn) error {
 		for key := range s.dirty {
-			if _, ok := entries[key]; ok {
-				continue
-			}
 			item, err := txn.Get([]byte(key))
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				entries[key] = nil
@@ -728,6 +869,12 @@ func (s *BadgerStore) publish(entries map[string][]byte) error {
 	if err != nil {
 		return err
 	}
+	return s.publishStage(entries)
+}
+
+// publishStage writes one bounded candidate or restoration delta. Caller holds
+// mu. Restoration uses this directly so it never recursively merges candidates.
+func (s *BadgerStore) publishStage(entries map[string][]byte) error {
 	if s.next == math.MaxUint64 {
 		return errors.New("badger: storage timestamp exhausted")
 	}
@@ -737,6 +884,7 @@ func (s *BadgerStore) publish(entries map[string][]byte) error {
 	defer wb.Cancel()
 	wb.SetMaxPendingTxns(1)
 	count := 0
+	var err error
 	for key, val := range entries {
 		s.dirty[key] = struct{}{}
 		if val == nil {
@@ -777,8 +925,11 @@ func (s *BadgerStore) publish(entries map[string][]byte) error {
 	if err := fence.CommitAt(ts, nil); err != nil {
 		return err
 	}
-	s.active.Store(ts)
 	clear(s.dirty)
+	s.readersMu.Lock()
+	s.active.Store(ts)
+	s.advanceDiscardLocked()
+	s.readersMu.Unlock()
 	return nil
 }
 

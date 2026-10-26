@@ -119,3 +119,43 @@ func TestColdSyncRateLimitWaitHonorsCancellation(t *testing.T) {
 		t.Fatalf("backoff cancellation: %v", e)
 	}
 }
+
+func TestDecoderV4NativeEnvelope(t *testing.T) {
+	valid := &types.Block{Header: types.BlockHeader{Height: 1}, Inputs: []types.Input{{LegacyPubKey: string(make([]byte, 88))}}, Outputs: []types.Output{{RangeProof: make([]byte, types.MaxRangeProofBytes)}}}
+	for _, mutate := range []func(*types.Block){
+		nil,
+		func(b *types.Block) { b.Inputs[0].LegacyPubKey += "x" },
+		func(b *types.Block) { b.Inputs = make([]types.Input, types.MaxBlockInputs+1) },
+		func(b *types.Block) { b.Outputs = make([]types.Output, types.MaxBlockOutputs+1) },
+		func(b *types.Block) { b.Kernels = make([]types.Kernel, types.MaxBlockKernels+1) },
+		func(b *types.Block) { b.Outputs[0].RangeProof = append(b.Outputs[0].RangeProof, 0) },
+	} {
+		raw, err := encodeBlockMsg(valid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b types.Block
+		if err := json.Unmarshal(raw, &b); err != nil {
+			t.Fatal(err)
+		}
+		if mutate != nil {
+			mutate(&b)
+		}
+		raw, err = encodeBlockMsg(&b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = decodeBlockMsg(raw)
+		if (err != nil) != (mutate != nil) {
+			t.Fatalf("block structural envelope: %v", err)
+		}
+		raw, err = encodeTxMsg(&types.Transaction{Inputs: b.Inputs, Outputs: b.Outputs, Kernels: b.Kernels})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = decodeTxMsg(raw)
+		if (err != nil) != (mutate != nil) {
+			t.Fatalf("transaction structural envelope: %v", err)
+		}
+	}
+}

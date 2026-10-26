@@ -37,7 +37,7 @@ func newForkStore(base Store, ancestor uint64) (*forkStore, error) {
 	if !ok || ancestor > tip.Height {
 		return nil, ErrUnknownAnc
 	}
-	if tip.Height-ancestor > 1024 {
+	if tip.Height-ancestor > MaxReorgBlocks {
 		return nil, ErrTooDeep
 	}
 	f := &forkStore{base: base, changes: suffixDelta{
@@ -49,7 +49,10 @@ func newForkStore(base Store, ancestor uint64) (*forkStore, error) {
 		if err != nil {
 			return nil, err
 		}
-		undo, err := base.UndoAt(h)
+		if err := bodyBounds(b); err != nil {
+			return nil, err
+		}
+		undo, err := base.UndoAtBudget(h, MaxUndoRecordBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -75,7 +78,8 @@ func newForkStore(base Store, ancestor uint64) (*forkStore, error) {
 		for _, k := range b.Kernels {
 			f.changes.Kernels[types.KernelID(&k)] = false
 		}
-		for _, o := range cloneOutputs(undo) {
+		// UndoAtBudget already returned isolated, owned proof slices.
+		for _, o := range undo {
 			o := o
 			f.changes.UTXOs[o.Commit] = &o
 			if o.Features == types.OutputFeaturesLegacy {
@@ -122,13 +126,23 @@ func (f *forkStore) BlockByHash(h types.Hash) (*types.Block, error) {
 	return f.BlockAt(v)
 }
 func (f *forkStore) UndoAt(h uint64) ([]types.Output, error) {
+	return f.UndoAtBudget(h, MaxUndoRecordBytes)
+}
+func (f *forkStore) UndoAtBudget(h uint64, maxBytes uint64) ([]types.Output, error) {
 	if v, ok := f.changes.Undo[h]; ok {
 		if v == nil {
 			return nil, errors.New("store: unknown undo")
 		}
+		n, err := undoResourceBytes(v)
+		if err != nil {
+			return nil, err
+		}
+		if n > maxBytes {
+			return nil, ErrResourceBudget
+		}
 		return cloneOutputs(v), nil
 	}
-	return f.base.UndoAt(h)
+	return f.base.UndoAtBudget(h, maxBytes)
 }
 func (f *forkStore) UTXOByCommit(c types.Commitment) (*types.Output, bool) {
 	if o, ok := f.changes.UTXOs[c]; ok {
@@ -170,6 +184,9 @@ func (f *forkStore) WriteBlock(b *types.Block) error {
 	if b == nil {
 		return errors.New("store: nil block")
 	}
+	if err := bodyBounds(b); err != nil {
+		return err
+	}
 	tip := f.changes.Tip
 	if tip.Height == math.MaxUint64 || b.Header.Height != tip.Height+1 {
 		return errors.New("store: noncontiguous height")
@@ -183,6 +200,9 @@ func (f *forkStore) WriteBlock(b *types.Block) error {
 	}
 	spent, err := checkStoreDelta(b, f.storeDeltaReader())
 	if err != nil {
+		return err
+	}
+	if _, err := undoResourceBytes(spent); err != nil {
 		return err
 	}
 	b = cloneBlock(b)
@@ -206,7 +226,8 @@ func (f *forkStore) WriteBlock(b *types.Block) error {
 	}
 	h := b.Header.Height
 	f.changes.Blocks[h] = b
-	f.changes.Undo[h] = cloneOutputs(spent)
+	// checkStoreDelta's readers return isolated copies; transfer their ownership.
+	f.changes.Undo[h] = spent
 	f.changes.Hashes[id] = &h
 	f.changes.Tip = b.Header
 	return nil
@@ -229,15 +250,25 @@ func (s *memStore) orderedBlocks() []*types.Block {
 	return out
 }
 func (s *memStore) UndoAt(h uint64) ([]types.Output, error) {
+	return s.UndoAtBudget(h, MaxUndoRecordBytes)
+}
+func (s *memStore) UndoAtBudget(h uint64, maxBytes uint64) ([]types.Output, error) {
 	v, ok := s.undo[h]
 	if !ok {
 		return nil, errors.New("store: missing undo")
 	}
+	n, err := undoResourceBytes(v)
+	if err != nil {
+		return nil, err
+	}
+	if n > maxBytes {
+		return nil, ErrResourceBudget
+	}
 	return cloneOutputs(v), nil
 }
 func (s *memStore) ReplaceSuffix(ancestor uint64, incoming []*types.Block) error {
-	if len(incoming) > 1024 {
-		return ErrTooDeep
+	if err := CheckReorgResourceBudget(incoming); err != nil {
+		return err
 	}
 	f, err := newForkStore(s, ancestor)
 	if err != nil {

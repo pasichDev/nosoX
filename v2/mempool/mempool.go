@@ -182,7 +182,7 @@ func cloneTx(tx *types.Transaction) *types.Transaction {
 func transactionSize(tx *types.Transaction) int {
 	n := 128 * (len(tx.Inputs) + len(tx.Outputs) + len(tx.Kernels))
 	for _, i := range tx.Inputs {
-		n += len(i.LegacySig) + len(i.LegacyAddr)
+		n += 64 + len(i.LegacySig) + len(i.LegacyAddr) + len(i.LegacyPubKey)
 	}
 	for _, o := range tx.Outputs {
 		n += len(o.RangeProof) + len(o.LegacyAddress)
@@ -213,19 +213,19 @@ func transactionBounds(tx *types.Transaction) (int, error) {
 	if tx == nil {
 		return 0, errors.New("mempool: nil transaction")
 	}
-	if len(tx.Inputs) > 4096 || len(tx.Outputs) > 4096 || len(tx.Kernels) == 0 || len(tx.Kernels) > 4096 {
+	if len(tx.Inputs) > types.MaxBlockInputs || len(tx.Outputs) > types.MaxBlockOutputs || len(tx.Kernels) == 0 || len(tx.Kernels) > types.MaxBlockKernels {
 		return 0, errors.New("mempool: transaction bounds")
 	}
 	bodyBytes := 128 * (len(tx.Inputs) + len(tx.Outputs) + len(tx.Kernels))
 	for _, o := range tx.Outputs {
 		bodyBytes += len(o.RangeProof) + len(o.LegacyAddress)
-		if len(o.RangeProof) > 16384 || len(o.LegacyAddress) > 128 {
+		if len(o.RangeProof) > types.MaxRangeProofBytes || len(o.LegacyAddress) > 128 {
 			return 0, errors.New("mempool: output bounds")
 		}
 	}
 	for _, i := range tx.Inputs {
-		bodyBytes += len(i.LegacySig) + len(i.LegacyAddr)
-		if len(i.LegacySig) > 1024 || len(i.LegacyAddr) > 128 {
+		bodyBytes += 64 + len(i.LegacySig) + len(i.LegacyAddr) + len(i.LegacyPubKey)
+		if len(i.LegacySig) > 256 || len(i.LegacyAddr) > 256 || len(i.LegacyPubKey) > 88 {
 			return 0, errors.New("mempool: input bounds")
 		}
 	}
@@ -241,7 +241,7 @@ func transactionBounds(tx *types.Transaction) (int, error) {
 		fee += k.Fee
 	}
 
-	if bodyBytes > 1<<20 {
+	if bodyBytes > types.MaxBlockBodyBytes {
 		return 0, errors.New("mempool: transaction too large")
 	}
 	return bodyBytes, nil
