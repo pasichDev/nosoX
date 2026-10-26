@@ -33,3 +33,23 @@ func TestBadgerHistoricalIdentityLookupFailsClosed(t *testing.T) {
 		t.Error("closed database must reject kernel uniqueness checks")
 	}
 }
+
+func TestBadgerMalformedHeightIndexFailsClosed(t *testing.T) {
+	store, err := OpenBadger(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var hash types.Hash
+	hash[0] = 5
+	key := append([]byte{kHash}, hash[:]...)
+	if err := store.mutate(func(txn *stageTxn) error {
+		return txn.Set(key, []byte{42}) // invalid: heights must be exactly 8 bytes
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.HeightOf(hash); ok {
+		t.Fatal("corrupted hash index must not resolve to a valid height")
+	}
+}
