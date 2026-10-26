@@ -9,6 +9,13 @@ permissions:
   contents: read
 
 jobs:
+  runner-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: runner initialized
+        run: echo "github-hosted runner initialized"
+
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
