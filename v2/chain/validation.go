@@ -59,38 +59,8 @@ func validateGenesis(b *types.Block) error {
 	if err := validateStructure(b); err != nil {
 		return err
 	}
-	if b.Header.Height != 0 || !b.Header.PrevHash.IsZero() || len(b.Inputs) != 0 || len(b.Kernels) != 0 {
+	if b.Header.Height != 0 || !b.Header.PrevHash.IsZero() || len(b.Inputs) != 0 || len(b.Outputs) != 0 || len(b.Kernels) != 0 {
 		return errors.New("chain: invalid trusted genesis")
-	}
-	seen := map[types.Commitment]bool{}
-	addresses := map[string]bool{}
-	gvts := map[uint8]bool{}
-	for _, o := range b.Outputs {
-		if seen[o.Commit] {
-			return errors.New("chain: duplicate genesis commitment")
-		}
-		seen[o.Commit] = true
-		if o.Features != types.OutputFeaturesLegacy && o.Features != types.OutputFeaturesLegacyGVT {
-			return errors.New("chain: invalid genesis allocation feature")
-		}
-		if o.LegacyAddress == "" || o.LegacyAmount < 0 || len(o.RangeProof) != 0 {
-			return errors.New("chain: invalid genesis allocation")
-		}
-		if !v2crypto.ValidPublicPoint(o.Commit) {
-			return ErrBadOutput
-		}
-		if o.Features == types.OutputFeaturesLegacy {
-			if addresses[o.LegacyAddress] {
-				return errors.New("chain: duplicate legacy allocation")
-			}
-			addresses[o.LegacyAddress] = true
-		}
-		if o.Features == types.OutputFeaturesLegacyGVT {
-			if o.GVTNumber >= 100 || gvts[o.GVTNumber] || o.LegacyAmount != types.GVTBaseValue {
-				return errors.New("chain: invalid GVT allocation")
-			}
-			gvts[o.GVTNumber] = true
-		}
 	}
 	return nil
 }
@@ -99,6 +69,7 @@ func (c *Chain) verifyHistory(store Store, genesis *types.Block) error {
 	if persistent, ok := store.(*BadgerStore); ok {
 		return c.streamingVerifyHistory(persistent, genesis)
 	}
+	// Remaining case: the in-memory store, replayed into a fresh memStore.
 	g, err := store.BlockAt(0)
 	if err != nil {
 		return err
@@ -123,57 +94,66 @@ func (c *Chain) verifyHistory(store Store, genesis *types.Block) error {
 		if err != nil {
 			return err
 		}
-		if err = check.validate(b); err != nil {
+		if err = check.validate(b, false); err != nil {
 			return fmt.Errorf("chain: invalid persisted block %d: %w", h, err)
 		}
 		if err = staged.WriteBlock(b); err != nil {
 			return err
 		}
 	}
-	if s, ok := store.(*BadgerStore); ok {
-		return s.verifyState(staged.orderedBlocks())
-	}
 	return nil
 }
 
 // ValidateTransaction checks admission against the next canonical block state.
-// Fee destination outputs and subsidy are constructed separately by the miner.
+// The coinbase (subsidy plus fees) is constructed separately by the miner.
+//
+// Cheapest checks first: bounds and shape, then state (inputs, maturity,
+// duplicates) and the balance equation under the chain lock; the signatures
+// and range proofs, which dominate the cost, run last and without the lock, so
+// a transaction that cannot balance never reaches them.
 func (c *Chain) ValidateTransaction(tx *types.Transaction) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if tx == nil {
-		return errors.New("chain: nil transaction")
-	}
-	tip, ok := c.store.Tip()
-	if !ok || tip.Height == math.MaxUint64 {
-		return errors.New("chain: unavailable tip")
-	}
-	b := &types.Block{Header: types.BlockHeader{Height: tip.Height + 1}, Inputs: tx.Inputs, Outputs: tx.Outputs, Kernels: tx.Kernels}
-	if len(b.Inputs) == 0 || len(b.Outputs) == 0 || len(b.Kernels) == 0 {
-		return errors.New("chain: empty transaction")
-	}
-	if err := bodyBounds(b); err != nil {
-		return err
-	}
-	reserveOutputs, reserveKernels := 0, 0
-	if types.BlockReward(b.Header.Height) > 0 {
-		reserveOutputs++
-		reserveKernels++
-	}
-	if TotalKernelFee(b) > 0 {
-		reserveOutputs++
-	}
-	if len(b.Outputs)+reserveOutputs > types.MaxBlockOutputs || len(b.Kernels)+reserveKernels > types.MaxBlockKernels {
-		return errors.New("chain: transaction leaves no mandatory block capacity")
-	}
-	n, err := BodyResourceBytes(b)
+	b, err := c.checkTransactionCheap(tx)
 	if err != nil {
 		return err
 	}
-	if n+uint64(reserveOutputs*128+reserveKernels*(128+65)) > types.MaxBlockBodyBytes {
-		return ErrResourceBudget
+	return verifyCrypto(b)
+}
+
+func (c *Chain) checkTransactionCheap(tx *types.Transaction) (*types.Block, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if tx == nil {
+		return nil, errors.New("chain: nil transaction")
 	}
-	return c.validateBody(b, false)
+	tip, ok := c.store.Tip()
+	if !ok || tip.Height == math.MaxUint64 {
+		return nil, errors.New("chain: unavailable tip")
+	}
+	b := &types.Block{Header: types.BlockHeader{Height: tip.Height + 1, NetworkMagic: tip.NetworkMagic}, Inputs: tx.Inputs, Outputs: tx.Outputs, Kernels: tx.Kernels}
+	if len(b.Inputs) == 0 || len(b.Outputs) == 0 || len(b.Kernels) == 0 {
+		return nil, errors.New("chain: empty transaction")
+	}
+	if err := bodyBounds(b); err != nil {
+		return nil, err
+	}
+	// The block's one coinbase output and kernel are reserved whenever the block
+	// will have to carry one: while the subsidy lasts, and afterwards whenever a
+	// transaction pays a fee.
+	reserveOutputs, reserveKernels, reserveBytes := CoinbaseReserve(b.Header.Height, TotalKernelFee(b))
+	if len(b.Outputs)+reserveOutputs > types.MaxBlockOutputs || len(b.Kernels)+reserveKernels > types.MaxBlockKernels {
+		return nil, errors.New("chain: transaction leaves no mandatory block capacity")
+	}
+	n, err := BodyResourceBytes(b)
+	if err != nil {
+		return nil, err
+	}
+	if n+reserveBytes > types.MaxBlockBodyBytes {
+		return nil, ErrResourceBudget
+	}
+	if err := c.validateBody(b, false); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 func (c *Chain) validateBody(b *types.Block, block bool) error {
@@ -188,36 +168,26 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 		inputs[in.Commit] = true
 		stored, ok := c.store.UTXOByCommit(in.Commit)
 		if !ok {
-			return ErrDoubleSpend
+			return fmt.Errorf("%w: %w", ErrDoubleSpend, ErrTxState)
 		}
-		if in.Features != stored.Features || in.LegacyAddr != stored.LegacyAddress || in.LegacyAmount != stored.LegacyAmount {
+		if in.Features != stored.Features {
 			return errors.New("chain: input metadata mismatch")
 		}
 		switch stored.Features {
-		case types.OutputFeaturesLegacy, types.OutputFeaturesLegacyGVT:
-			// Explicit v4 claim legs are checked against trusted state below.
-		case types.OutputFeaturesPlain, types.OutputFeaturesCoinbase, types.OutputFeaturesDevFund:
-			if in.LegacySig != "" || in.LegacyPubKey != "" || !in.LegacyOutputID.IsZero() || !in.LegacyKernelID.IsZero() || in.LegacyAddr != "" || in.LegacyAmount != 0 {
-				return errors.New("chain: unexpected legacy authorization")
-			}
+		case types.OutputFeaturesPlain, types.OutputFeaturesCoinbase:
 		default:
 			return errors.New("chain: unsupported input feature")
 		}
 		if stored.Features == types.OutputFeaturesCoinbase {
-			start := uint64(0)
-			if b.Header.Height >= types.CoinbaseLock {
-				start = b.Header.Height - types.CoinbaseLock + 1
+			// Mature once CoinbaseLock blocks have passed since creation. The
+			// creation height is indexed with the output, so no block bodies
+			// are read.
+			created, ok := c.store.OutputHeight(in.Commit)
+			if !ok {
+				return errors.New("chain: coinbase creation height unavailable")
 			}
-			for h := start; h < b.Header.Height; h++ {
-				old, err := c.store.BlockAt(h)
-				if err != nil {
-					return err
-				}
-				for _, o := range old.Outputs {
-					if o.Commit == in.Commit {
-						return fmt.Errorf("chain: immature coinbase input %d", i)
-					}
-				}
+			if created >= b.Header.Height || b.Header.Height-created < types.CoinbaseLock {
+				return fmt.Errorf("%w: chain: immature coinbase input %d", ErrTxState, i)
 			}
 		}
 	}
@@ -229,13 +199,13 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 		if !v2crypto.ValidPublicPoint(o.Commit) {
 			return ErrBadOutput
 		}
-		if outputs[o.Commit] || inputs[o.Commit] || c.store.HasOutput(o.Commit) || c.store.HasUTXO(o.Commit) {
-			return errors.New("chain: duplicate or existing output")
+		if outputs[o.Commit] || inputs[o.Commit] {
+			return errors.New("chain: duplicate output")
+		}
+		if c.store.HasOutput(o.Commit) || c.store.HasUTXO(o.Commit) {
+			return fmt.Errorf("%w: chain: output already exists", ErrTxState)
 		}
 		outputs[o.Commit] = true
-		if o.LegacyAddress != "" || o.LegacyAmount != 0 || o.GVTNumber != 0 {
-			return ErrBadOutput
-		}
 		switch o.Features {
 		case types.OutputFeaturesPlain:
 			if len(o.RangeProof) == 0 {
@@ -247,10 +217,6 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 			}
 			cbOuts++
 			cb = o
-		case types.OutputFeaturesDevFund:
-			if !block || len(o.RangeProof) != 0 {
-				return ErrBadOutput
-			}
 		default:
 			return ErrBadOutput
 		}
@@ -265,8 +231,11 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 			return errors.New("chain: invalid excess point")
 		}
 		id := types.KernelID(k)
-		if seenK[id] || c.store.HasKernel(id) {
+		if seenK[id] {
 			return errors.New("chain: duplicate kernel")
+		}
+		if c.store.HasKernel(id) {
+			return fmt.Errorf("%w: chain: kernel already included", ErrTxState)
 		}
 		seenK[id] = true
 		if k.Fee > math.MaxInt64-fees {
@@ -280,12 +249,11 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 			}
 			cbKernels++
 			cbK = k
-		case types.KernelFeaturesLegacyClaim:
-			if k.Fee != 0 || k.LockHeight != 0 || len(k.ExcessSig) != 65 {
-				return errors.New("chain: invalid legacy claim kernel")
-			}
 		case types.KernelFeaturesPlain:
-			if k.LockHeight > b.Header.Height || len(k.ExcessSig) != 65 {
+			if k.LockHeight > b.Header.Height {
+				return fmt.Errorf("%w: chain: kernel locked until height %d", ErrTxState, k.LockHeight)
+			}
+			if len(k.ExcessSig) != 65 {
 				return errors.New("chain: invalid kernel authorization")
 			}
 		default:
@@ -293,33 +261,116 @@ func (c *Chain) validateBody(b *types.Block, block bool) error {
 		}
 	}
 	if block {
-		reward := types.BlockReward(b.Header.Height)
-		if reward > 0 {
-			if cbOuts != 1 || cbKernels != 1 || cb.Commit != cbK.Excess || !wallet.VerifyCoinbase(b.Header.Height, reward, cbK.Excess, cbK.ExcessSig) {
-				return errors.New("chain: invalid or missing subsidy authorization")
-			}
-		} else if cbOuts != 0 || cbKernels != 0 {
-			return errors.New("chain: subsidy after issuance ended")
-		}
-		if err := validateDevFund(b); err != nil {
+		// The miner is paid reward + fees, no more and no less. A coinbase is
+		// required exactly when that amount is positive, including after the
+		// subsidy has ended, and is forbidden otherwise.
+		amount, err := CoinbaseAmount(b)
+		if err != nil {
 			return err
 		}
+		if amount > 0 {
+			if cbOuts != 1 || cbKernels != 1 || cb.Commit != cbK.Excess {
+				return errors.New("chain: invalid or missing coinbase")
+			}
+		} else if cbOuts != 0 || cbKernels != 0 {
+			return errors.New("chain: coinbase in a block that pays nothing")
+		}
 	}
-	if err := c.validateLegacyClaims(b); err != nil {
-		return fmt.Errorf("chain: legacy ownership procedure: %w", err)
+	// Cheap state-dependent balance check before any expensive proof work.
+	return c.validateBalance(b)
+}
+
+// verifyCrypto runs the signature and range-proof checks. They depend only on
+// the block bytes (and the network magic), never on chain state, so callers run
+// them outside the chain lock and after every cheaper check has passed.
+func verifyCrypto(b *types.Block) error {
+	amount, err := CoinbaseAmount(b)
+	if err != nil {
+		return err
 	}
-	for _, k := range b.Kernels {
-		if k.Features == types.KernelFeaturesPlain {
-			id := types.KernelID(&k)
-			if !v2crypto.SchnorrVerify(k.Excess, id[:], k.ExcessSig) {
+	for i := range b.Kernels {
+		k := &b.Kernels[i]
+		switch k.Features {
+		case types.KernelFeaturesCoinbase:
+			if amount <= 0 || !wallet.VerifyCoinbase(b.Header.NetworkMagic, b.Header.Height, amount, k.Excess, k.ExcessSig) {
+				return errors.New("chain: invalid or missing coinbase authorization")
+			}
+		case types.KernelFeaturesPlain:
+			if !v2crypto.SchnorrVerify(k.Excess, types.KernelSigningMessage(b.Header.NetworkMagic, k), k.ExcessSig) {
 				return errors.New("chain: invalid kernel authorization")
 			}
 		}
 	}
-	for _, o := range b.Outputs {
+	for i := range b.Outputs {
+		o := &b.Outputs[i]
 		if o.Features == types.OutputFeaturesPlain && !v2crypto.VerifyRange(o.Commit, o.RangeProof) {
 			return ErrBadOutput
 		}
 	}
-	return c.validateBalance(b)
+	return nil
+}
+
+// TotalKernelFee sums public fees, saturating at MaxUint64 on overflow.
+// Consensus separately rejects totals above MaxInt64 before using this helper.
+func TotalKernelFee(b *types.Block) uint64 {
+	var sum uint64
+	for i := range b.Kernels {
+		if b.Kernels[i].Fee > math.MaxUint64-sum {
+			return math.MaxUint64
+		}
+		sum += b.Kernels[i].Fee
+	}
+	return sum
+}
+
+// errFeeOverflow reports kernel fees that cannot be summed in an int64.
+var errFeeOverflow = errors.New("chain: fee overflow")
+
+// PlainKernelFees is the total fee of the block's plain kernels: the fee the
+// spends destroy and the coinbase re-creates. It is the single definition used
+// by the balance equation (validateBalance) and the coinbase amount
+// (CoinbaseAmount), so the two cannot disagree about which kernels carry value.
+// Coinbase kernels never count; a coinbase kernel with a nonzero Fee is also
+// rejected outright by validateBody. Totals above MaxInt64 are an error.
+func PlainKernelFees(b *types.Block) (uint64, error) {
+	var sum uint64
+	for i := range b.Kernels {
+		if b.Kernels[i].Features == types.KernelFeaturesCoinbase {
+			continue
+		}
+		if b.Kernels[i].Fee > math.MaxInt64-sum {
+			return 0, errFeeOverflow
+		}
+		sum += b.Kernels[i].Fee
+	}
+	return sum, nil
+}
+
+// CoinbaseReserve is the output, kernel and body-byte capacity a block must keep
+// free for its mandatory coinbase when its selected transactions pay fees. A
+// coinbase is required exactly when reward+fees > 0, so after the subsidy has
+// ended nothing is reserved until a transaction pays a fee. The mempool
+// admission check and the miner's transaction selection both use this.
+func CoinbaseReserve(height uint64, fees uint64) (outputs, kernels int, bytes uint64) {
+	if types.BlockReward(height) > 0 || fees > 0 {
+		return 1, 1, 128 + (128 + 65)
+	}
+	return 0, 0, 0
+}
+
+// CoinbaseAmount is the exact value a block's coinbase must commit:
+// BlockReward(height) plus the total of its plain kernel fees. Fees are not
+// minted; the transactions destroy them (outputs + fee = inputs) and the
+// coinbase collects them, so the unspent set always sums to the cumulative
+// subsidy. The arithmetic is overflow-checked in int64.
+func CoinbaseAmount(b *types.Block) (int64, error) {
+	reward := types.BlockReward(b.Header.Height)
+	fees, err := PlainKernelFees(b)
+	if err != nil {
+		return 0, err
+	}
+	if int64(fees) > math.MaxInt64-reward {
+		return 0, errors.New("chain: coinbase amount overflow")
+	}
+	return reward + int64(fees), nil
 }

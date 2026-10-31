@@ -1,5 +1,0 @@
-# github.com/pasichDev/noso-go/v2/p2p
-v2/p2p/sync.go:9:2: "fmt" imported and not used
-# github.com/pasichDev/noso-go/v2/p2p
-# [github.com/pasichDev/noso-go/v2/p2p]
-vet: v2/p2p/sync.go:9:2: "fmt" imported and not used

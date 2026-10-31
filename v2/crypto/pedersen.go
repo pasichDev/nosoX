@@ -27,13 +27,13 @@ import (
 func Curve() *btcec.KoblitzCurve { return btcec.S256() }
 
 // generatorH is the secondary base point for Pedersen value commits.
-// Derived once at init time from SHA-256("Noso v2 Pedersen H point") using
+// Derived once at init time from SHA-256("NosoX/pedersen-h/v5\0") using
 // try-and-increment over the X coordinate. The resulting Y is fixed at
 // "smaller" parity for determinism.
 var generatorH *btcec.PublicKey
 
 func init() {
-	seed := sha256.Sum256([]byte("Noso v2 Pedersen H point"))
+	seed := sha256.Sum256([]byte("NosoX/pedersen-h/v5\x00"))
 	x := new(big.Int).SetBytes(seed[:])
 	for {
 		x.Mod(x, Curve().Params().P)

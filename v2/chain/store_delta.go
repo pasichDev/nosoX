@@ -31,7 +31,7 @@ func checkStoreDelta(b *types.Block, read deltaReader) ([]types.Output, error) {
 		if !ok {
 			return nil, ErrDoubleSpend
 		}
-		if out.Commit != in.Commit || out.Features != in.Features || out.LegacyAddress != in.LegacyAddr || out.LegacyAmount != in.LegacyAmount {
+		if out.Commit != in.Commit || out.Features != in.Features {
 			return nil, errors.New("store: input metadata mismatch")
 		}
 		spent = append(spent, *out)

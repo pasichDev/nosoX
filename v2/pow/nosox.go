@@ -11,7 +11,7 @@
 //	time   = 1 pass
 //	threads = 1 lane (deterministic)
 //	keyLen = 32 bytes
-//	salt   = "NosoX-v1-PoW-salt-32B-deterministic"
+//	salt   = "NosoX/pow-salt/v5\0"
 //
 // The hash is interpreted as a big-endian 256-bit integer; a block is
 // valid when hash * difficulty <= 2^256 − 1 (standard Bitcoin-style
@@ -35,7 +35,7 @@ const (
 
 // Salt is fixed for determinism. The header carries the actual entropy
 // (prev_hash, merkle roots, nonce).
-var Salt = []byte("NosoX-v1-PoW-salt-32B-deterministic")
+var Salt = []byte("NosoX/pow-salt/v5\x00")
 
 // MaxTarget is 2^256 − 1.
 var MaxTarget = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
@@ -68,13 +68,4 @@ func Verify(h *types.BlockHeader) bool {
 	digest := Hash(h)
 	hashInt := new(big.Int).SetBytes(digest[:])
 	return hashInt.Cmp(Target(h.Difficulty)) <= 0
-}
-
-// HashFromDigest is exposed so tests can compare directly without going
-// through types.BlockHeader.
-func HashFromBytes(preimage []byte) [32]byte {
-	digest := argon2.IDKey(preimage, Salt, Argon2Time, Argon2Memory, Argon2Threads, Argon2KeyLen)
-	var out [32]byte
-	copy(out[:], digest)
-	return out
 }

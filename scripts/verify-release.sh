@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify a downloaded Noso v2 release.
+# Verify a downloaded NosoX release.
 #
 # Usage:
 #   scripts/verify-release.sh path/to/release-dir
@@ -19,7 +19,11 @@ if [[ ! -f SHA256SUMS ]]; then
 fi
 
 echo "==> Verifying SHA256SUMS against actual files"
-sha256sum -c SHA256SUMS
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c SHA256SUMS
+else
+  shasum -a 256 -c SHA256SUMS
+fi
 echo "  ✓ all hashes match"
 
 if [[ -n "$PUB" ]]; then

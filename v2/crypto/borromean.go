@@ -334,9 +334,12 @@ func randomScalar() (*big.Int, error) {
 	return nil, errors.New("rangeproof: rejection sampling failed")
 }
 
+// borromeanDomain is the OR-proof challenge domain tag (NUL terminated).
+const borromeanDomain = "NosoX/borromean/v5\x00"
+
 func orChallenge(C, T0, T1 [33]byte) *big.Int {
 	h := sha256.New()
-	h.Write([]byte("Noso-v2-Borromean"))
+	h.Write([]byte(borromeanDomain))
 	h.Write(C[:])
 	h.Write(T0[:])
 	h.Write(T1[:])

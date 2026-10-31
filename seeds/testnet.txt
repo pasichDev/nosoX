@@ -1,8 +1,8 @@
-# Noso v2 — testnet seed nodes
+# NosoX testnet seed list.
 #
-# Served at https://raw.githubusercontent.com/pasichDev/noso-go/main/seeds/testnet.txt and fetched by nodes
-# started with -network testnet. Same format as mainnet.txt: one libp2p
-# multi-address per line, '#' comments and blank lines ignored.
+# This list is empty. No public testnet seed nodes exist. Nodes started with
+# -network testnet -http-seeds fetch this file over HTTPS (see v2/p2p/httpseeds.go).
+# Use -seed to dial a node you run yourself.
 #
-# Example:
-# /dns4/testnet-seed.pasichdev.xyz/tcp/7781/p2p/12D3KooWExampleTestnetSeedxxxxxxxxxxxxxxxxx
+# Format: one libp2p multiaddress per line, ending in /p2p/<peer-id>. Blank lines
+# and lines starting with '#' are ignored.

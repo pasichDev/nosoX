@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 )
 
-// CompactFilter is a per-block bloom-style filter over output commitments
-// (and legacy addresses, for v1 holders). A light wallet downloads only
+// CompactFilter is a per-block bloom-style filter over output commitments.
+// A light wallet downloads only
 // the filter; if it matches one of the wallet's "watch" entries the
 // wallet fetches the full block to extract its outputs.
 //
@@ -19,8 +19,7 @@ type CompactFilter struct {
 	Bits   [32]byte // 256 bits
 }
 
-// FilterAddElement adds a single watch-item (legacy address or commit
-// bytes) to the filter.
+// AddBytes adds a single watch-item (commit bytes) to the filter.
 func (f *CompactFilter) AddBytes(elem []byte) {
 	for k := 0; k < 4; k++ {
 		idx := filterHash(elem, k) % 256
@@ -40,17 +39,13 @@ func (f *CompactFilter) MatchBytes(elem []byte) bool {
 	return true
 }
 
-// BuildFilter constructs a filter from a block, including:
-//   - every output commit (33 bytes)
-//   - every legacy address (utf-8)
+// BuildFilter constructs a filter from a block, including every output
+// commit (33 bytes).
 func BuildFilter(b *Block) CompactFilter {
 	f := CompactFilter{Height: b.Header.Height}
 	for i := range b.Outputs {
 		o := &b.Outputs[i]
 		f.AddBytes(o.Commit[:])
-		if o.Features == OutputFeaturesLegacy && o.LegacyAddress != "" {
-			f.AddBytes([]byte(o.LegacyAddress))
-		}
 	}
 	return f
 }

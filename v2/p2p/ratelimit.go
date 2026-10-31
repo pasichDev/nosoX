@@ -9,11 +9,11 @@ import (
 
 // rateLimiter is a per-peer leaky-bucket throttle. Each peer gets a
 // budget that refills at `rate` units per second up to `burst`. The
-// /noso/sync/1 stream handler asks for 1 unit per batch.
+// /NosoX/sync/v5 stream handler asks for 1 unit per batch.
 //
-// Defaults: 1 batch / 5 s with a burst of 3 — enough for a fresh node
-// to catch up via concurrent requests, slow enough that a malicious
-// peer cannot saturate bandwidth.
+// The node serves sync at 2 requests / s with a burst of 16 (a 64-block batch
+// each, so a fresh node catches up at over 100 blocks/s). The global byte
+// budget below bounds what many peers together can pull.
 type rateLimiter struct {
 	mu      sync.Mutex
 	buckets map[peer.ID]*bucket
@@ -27,13 +27,12 @@ type bucket struct {
 	last   time.Time
 }
 
-// newRateLimiter returns a fresh limiter. Defaults: 0.2 tokens/sec, burst 3.
-func newRateLimiter() *rateLimiter {
-	return &rateLimiter{
-		buckets: map[peer.ID]*bucket{},
-		rate:    0.2,
-		burst:   3,
-	}
+// newRateLimiter returns a strict limiter: 0.2 tokens/sec, burst 3. The node
+// uses newRateLimiterRate with its own sync budget.
+func newRateLimiter() *rateLimiter { return newRateLimiterRate(0.2, 3) }
+
+func newRateLimiterRate(rate, burst float64) *rateLimiter {
+	return &rateLimiter{buckets: map[peer.ID]*bucket{}, rate: rate, burst: burst}
 }
 
 // allow reports whether the peer may consume one token now. If yes, it
@@ -82,4 +81,42 @@ func (r *rateLimiter) gc(ttl time.Duration) {
 			delete(r.buckets, k)
 		}
 	}
+}
+
+// byteBudget is a global token bucket of response bytes. It may go negative, so
+// one large response is always served but the next requests wait.
+type byteBudget struct {
+	mu     sync.Mutex
+	tokens float64
+	last   time.Time
+	rate   float64
+	burst  float64
+}
+
+func newByteBudget(rate, burst float64) *byteBudget {
+	return &byteBudget{tokens: burst, last: time.Now(), rate: rate, burst: burst}
+}
+
+// available reports whether a response may be built now.
+func (b *byteBudget) available() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refill()
+	return b.tokens > 0
+}
+
+func (b *byteBudget) spend(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refill()
+	b.tokens -= float64(n)
+}
+
+func (b *byteBudget) refill() {
+	now := time.Now()
+	b.tokens += now.Sub(b.last).Seconds() * b.rate
+	if b.tokens > b.burst {
+		b.tokens = b.burst
+	}
+	b.last = now
 }

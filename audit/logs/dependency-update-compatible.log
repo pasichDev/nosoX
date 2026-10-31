@@ -1,6 +1,0 @@
-go: downloading github.com/quic-go/quic-go v0.60.0
-go: downloading golang.org/x/net v0.55.0
-go: upgraded github.com/pion/dtls/v3 v3.1.2 => v3.1.4
-go: upgraded github.com/quic-go/quic-go v0.59.0 => v0.60.0
-go: upgraded github.com/quic-go/webtransport-go v0.10.0 => v0.11.1
-go: upgraded golang.org/x/net v0.54.0 => v0.55.0

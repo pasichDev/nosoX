@@ -1,6 +1,5 @@
-// builder.go implements the actual Transaction construction logic
-// the CLI exposes via `wallet claim`, `wallet pay`, `wallet receive`,
-// and `wallet finalize`, plus the GVT operations.
+// builder.go implements the output-construction helpers used by the
+// CLI's `wallet pay`, `wallet receive` and `wallet finalize` flows.
 //
 // The builder is deliberately conservative:
 //
@@ -13,17 +12,13 @@
 //     establish constant-time execution.
 //
 // This file is the integration point between the Slatepack codec
-// (slatepack.go), the legacy claim helpers (wallet.go), and the
-// cryptographic primitives in v2/crypto.
+// (slatepack.go) and the cryptographic primitives in v2/crypto.
 
 package wallet
 
 import (
 	"crypto/rand"
 	"errors"
-	"math/big"
-
-	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 
 	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
 	"github.com/pasichDev/noso-go/v2/types"
@@ -73,47 +68,3 @@ func NewPlainOutput(value int64) (PlainOutput, error) {
 		Value:    value,
 	}, nil
 }
-
-// ErrLegacyContextRequired rejects the old height-based claim API, which cannot
-// bind a trusted network/genesis or an exact destination leg. Use the v4 API.
-var ErrLegacyContextRequired = errors.New("wallet: legacy claim requires explicit v4 network/genesis context")
-var ErrGVTTransferUnsupported = errors.New("wallet: GVT identity transfer is unsupported; v4 only redeems trusted genesis allocations")
-
-// BuildLegacyClaim is retained only to reject ambiguous pre-v4 callers.
-func (w *Wallet) BuildLegacyClaim(legacyAddress string, balance int64, legacyCommit types.Commitment, currentHeight uint64) (*types.Transaction, PlainOutput, error) {
-	return nil, PlainOutput{}, ErrLegacyContextRequired
-}
-
-// BuildGVTRedeem is retained only to reject ambiguous pre-v4 callers.
-func (w *Wallet) BuildGVTRedeem(gvtSlot uint8, legacyAddress string, gvtCommit types.Commitment, currentHeight uint64) (*types.Transaction, PlainOutput, error) {
-	return nil, PlainOutput{}, ErrLegacyContextRequired
-}
-
-// BuildGVTTransfer rejects identity creation outside explicitly trusted genesis.
-func (w *Wallet) BuildGVTTransfer(gvtSlot uint8, legacyAddress string, gvtCommit types.Commitment, receiverBlinding [32]byte, currentHeight uint64) (*types.Transaction, error) {
-	return nil, ErrGVTTransferUnsupported
-}
-
-// signLegacyMessage wraps v1 ECDSA-SHA1 signing so the builder can
-// support historical tooling only; these signatures do not authorize v4 claims.
-func signLegacyMessage(privKeyB64, msg []byte) (string, error) {
-	// Defer to internal v1 crypto.
-	return v1cryptoSignWrapper(string(privKeyB64), msg)
-}
-
-// scalarSub returns (a − b) mod n on secp256k1 as a 32-byte scalar.
-// Constant-time via ModNScalar arithmetic.
-func scalarSub(a, b []byte) [32]byte {
-	var as, bs secp.ModNScalar
-	var ab, bb [32]byte
-	copy(ab[:], a)
-	copy(bb[:], b)
-	as.SetBytes(&ab)
-	bs.SetBytes(&bb)
-	bs.Negate()
-	as.Add(&bs)
-	return as.Bytes()
-}
-
-// Compile-time sanity check — kept because big.Int is used elsewhere.
-var _ = big.NewInt

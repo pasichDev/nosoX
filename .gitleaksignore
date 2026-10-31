@@ -1,0 +1,4 @@
+# False positive: prose in a deleted marketing document ("Schnorr, Argon2id key
+# derivation, XChaCha20-Poly1305 envelope"), rule generic-api-key, commit 4150b58d.
+4150b58d012dbdab00a96abe63f7f17a0663fa3a:docs/v2/PITCH.md:generic-api-key:221
+cmd/nosoxd/security_test.go:generic-api-key:8

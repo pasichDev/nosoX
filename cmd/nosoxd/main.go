@@ -1,18 +1,14 @@
-// nosoxd is the Noso v2 archive + mining daemon.
+// nosoxd is the NosoX archive + mining daemon.
 //
-//   - Loads (or initializes from genesis) chain state.
+//   - Loads (or initializes from the empty genesis) chain state.
 //   - Serves the JSON-RPC API used by the explorer and CLI wallet.
 //   - Listens for P2P gossip on a separate port.
-//   - Optionally drives a mining loop bound to a reward address.
+//   - Optionally drives a mining loop; rewards go to fresh keys in coinbases.json.
 //
 // Usage:
 //
 //	nosoxd -data /var/nosox -rpc :7780 -p2p :7781
-//	nosoxd -data /var/nosox -mine -threads 2 -reward NOSOXminerKey
-//
-// To bootstrap a fresh chain that inherits the v1 chain's balances:
-//
-//	nosoxd -data /var/nosox -genesis-summary /path/to/sumary.psk
+//	nosoxd -data /var/nosox -mine -threads 2 -reward my-label
 package main
 
 import (
@@ -21,7 +17,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -41,21 +36,26 @@ import (
 
 func main() {
 	var (
-		dataDir        = flag.String("data", "./nosox-data", "data directory")
-		rpcAddr        = flag.String("rpc", "127.0.0.1:7780", "JSON-RPC listen address")
-		p2pAddr        = flag.String("p2p", "127.0.0.1:7781", "P2P listen address")
-		seedAddr       = flag.String("seed", "", "comma-separated libp2p multi-addrs of seed peers")
-		relayAddr      = flag.String("relay", "", "comma-separated libp2p multi-addrs of relay nodes (for NAT)")
-		httpSeeds      = flag.Bool("http-seeds", false, "fetch the published seed list over HTTPS at startup (see v2/p2p/httpseeds.go)")
-		genesisSummary = flag.String("genesis-summary", "", "path to v1 sumary.psk to airdrop into genesis (only used on first start)")
-		genesisGVTs    = flag.String("genesis-gvts", "", "path to v1 gvts.psk to carry forward 100 GVT tokens (only used on first start)")
-		networkName    = flag.String("network", "testnet", "mainnet | testnet")
-		doMine         = flag.Bool("mine", false, "start mining immediately")
-		mineThreads    = flag.Int("threads", 1, "mining threads")
-		mineReward     = flag.String("reward", "nosox-default", "reward identifier for coinbase output")
-		rpcToken       = flag.String("rpc-token", "", "Bearer token for mutating RPC methods; empty = no auth (only safe on 127.0.0.1)")
-		rpcTLSCert     = flag.String("rpc-tls-cert", "", "TLS cert file: serve RPC over HTTPS directly from the node (so HTTPS browser apps can connect, no reverse proxy)")
-		rpcTLSKey      = flag.String("rpc-tls-key", "", "TLS key file (required with -rpc-tls-cert)")
+		dataDir     = flag.String("data", "./nosox-data", "data directory")
+		rpcAddr     = flag.String("rpc", "127.0.0.1:7780", "JSON-RPC listen address")
+		p2pAddr     = flag.String("p2p", "127.0.0.1:7781", "P2P listen address")
+		seedAddr    = flag.String("seed", "", "comma-separated libp2p multi-addrs of seed peers")
+		relayAddr   = flag.String("relay", "", "comma-separated libp2p multi-addrs of relay nodes, dialed once at startup (no AutoRelay reservation)")
+		httpSeeds   = flag.Bool("http-seeds", false, "fetch the published seed list over HTTPS at startup (see v2/p2p/httpseeds.go)")
+		networkName = flag.String("network", "testnet", "mainnet | testnet")
+		doMine      = flag.Bool("mine", false, "start mining immediately")
+		mineThreads = flag.Int("threads", 1, "mining threads")
+		mineReward  = flag.String("reward", "nosox-default", "free-form label for this miner, shown in the log only; not part of any block or signature")
+		rpcTokenArg = flag.String("rpc-token", "", "removed: set the "+rpcTokenEnv+" environment variable instead (the command line is visible to other users)")
+		rpcTLSCert  = flag.String("rpc-tls-cert", "", "TLS cert file: serve RPC over HTTPS directly from the node (so HTTPS browser apps can connect, no reverse proxy)")
+		rpcTLSKey   = flag.String("rpc-tls-key", "", "TLS key file (required with -rpc-tls-cert)")
+		natPortMap  = flag.Bool("nat-portmap", false, "ask the router for a port mapping via UPnP/NAT-PMP (off by default)")
+		allowPriv   = flag.Bool("allow-private-seeds", false, "keep loopback/private/link-local addresses from DNS and HTTPS seed lists (private test networks); explicit -seed addresses are never filtered")
+		soloMine    = flag.Bool("solo-mine", false, "mine without waiting for a synced peer, however mining is started (-mine or the startmining RPC): for a fresh single-node network; otherwise the miner idles until at least one peer is connected and none has more work")
+		allowedHost = flag.String("rpc-allowed-hosts", "", "comma-separated extra Host header names (no port) the RPC accepts besides localhost and IP literals, e.g. the name a loopback reverse proxy forwards; empty = none")
+		corsOrigin  = flag.String("rpc-cors-origin", "", "browser origin allowed to call the RPC (exact origin, or * for any); empty = no CORS headers")
+		verifyFull  = flag.Bool("verify-full", false, "replay and verify the whole chain at start even when a verified-history marker exists (use after restoring a data directory from an untrusted source)")
+		testDiff    = flag.Uint64("testnet-difficulty", 0, "testnet only: initial difficulty of the testnet genesis (default: the built-in genesis difficulty); changes the genesis hash, so every node of that testnet must use the same value")
 	)
 	maintenanceInterval := flag.Duration("storage-maintenance", 10*time.Minute, "interval for one bounded storage GC attempt; 0 disables")
 	flag.Parse()
@@ -64,11 +64,27 @@ func main() {
 	}
 
 	logger := log.New(os.Stderr, "nosoxd ", log.LstdFlags|log.Lshortfile)
-	if err := validateRPCBind(*rpcAddr, *rpcToken); err != nil {
+	// Registered first, so it runs after every other deferred cleanup (chain
+	// close, pool link): an RPC failure still shuts down cleanly but exits
+	// non-zero, which is what makes a supervisor restart the node.
+	exitCode := 0
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
+	if *rpcTokenArg != "" {
+		logger.Fatalf("-rpc-token was removed: export %s instead (a token on the command line is readable by every local user)", rpcTokenEnv)
+	}
+	rpcToken, err := rpcTokenFromEnv(os.Getenv)
+	if err != nil {
 		logger.Fatal(err)
 	}
 	if (*rpcTLSCert == "") != (*rpcTLSKey == "") {
 		logger.Fatal("both RPC TLS certificate and key are required")
+	}
+	if err := validateRPCConfig(*rpcAddr, rpcToken, *rpcTLSCert != ""); err != nil {
+		logger.Fatal(err)
 	}
 	if *networkName == "mainnet" {
 		logger.Fatal("mainnet disabled: unverified genesis and unresolved security release gates; use isolated testnet")
@@ -76,13 +92,22 @@ func main() {
 	if *networkName != "mainnet" && *networkName != "testnet" {
 		logger.Fatal("unknown network")
 	}
-	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
-		logger.Fatalf("data dir: %v", err)
-	}
 
+	if *testDiff != 0 && *networkName != "testnet" {
+		logger.Fatal("-testnet-difficulty is only valid with -network testnet")
+	}
 	magic := types.NetworkMagicMainnet
 	if *networkName == "testnet" {
 		magic = types.NetworkMagicTestnet
+	}
+	// Refuse to start on a tampered or unsigned baked checkpoint set before
+	// touching any state on disk.
+	checkpoints, err := trustedCheckpoints(magic, types.LauncherPubkey, types.MainnetCheckpointsSig, types.MainnetCheckpoints, types.TestnetCheckpoints)
+	if err != nil {
+		logger.Fatalf("refusing to start: %v", err)
+	}
+	if err := prepareDataDir(*dataDir); err != nil {
+		logger.Fatalf("data dir: %v", err)
 	}
 
 	chainDir := filepath.Join(*dataDir, "chain")
@@ -90,12 +115,20 @@ func main() {
 	if err != nil {
 		logger.Fatalf("open chain badger: %v", err)
 	}
-	defer c.Close()
+	defer func() {
+		if err := c.Close(); err != nil {
+			logger.Printf("chain close: %v", err)
+		}
+	}()
+	c.SetCheckpoints(checkpoints) // before LoadOrInit so replay is pinned too
+	c.SetFullVerify(*verifyFull)
 	gCfg := genesis.Default()
-	gCfg.SummaryPath = *genesisSummary
-	gCfg.GVTsPath = *genesisGVTs
 	gCfg.NetworkMagic = magic
-	gBlock, _, _, err := genesis.Build(gCfg)
+	if *testDiff != 0 {
+		gCfg.InitialDifficulty = *testDiff
+		logger.Printf("testnet genesis difficulty overridden to %d", *testDiff)
+	}
+	gBlock, err := genesis.Build(gCfg)
 	if err != nil {
 		logger.Fatalf("build genesis: %v", err)
 	}
@@ -107,11 +140,15 @@ func main() {
 		tip.Height, types.HeaderID(&tip), tip.Difficulty)
 
 	mp := mempool.NewValidated(2048, c.ValidateTransaction)
+	mp.SetPolicy(mempool.DefaultPolicy)
+	poolLink := mempool.Attach(c, mp) // blocks and reorgs keep the pool consistent
+	defer poolLink.Stop()
 	cbStore, err := wallet.OpenCoinbaseStore(filepath.Join(*dataDir, "coinbases.json"))
 	if err != nil {
 		logger.Fatalf("open coinbase store: %v", err)
 	}
 	mn := miner.New(c, mp, cbStore)
+	mn.SetLogger(logger.Printf)
 	// Network broadcast wiring: every mined block fans out via libp2p.
 	// We register the listener after the p2p node is created (below).
 
@@ -121,11 +158,14 @@ func main() {
 	if err != nil {
 		logger.Fatal(err)
 	}
-	node, err := p2p.NewLibp2p(listenAddrs, magic, c, mp)
+	node, err := p2p.NewLibp2pWithOptions(p2p.Options{ListenAddrs: listenAddrs, Magic: magic, DataDir: *dataDir, NATPortMap: *natPortMap}, c, mp)
 	if err != nil {
 		logger.Fatalf("p2p: %v", err)
 	}
 	node.SetLogger(func(format string, args ...any) { logger.Printf("p2p: "+format, args...) })
+	if !*soloMine {
+		mn.SetSyncGate(minerGate(node))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -144,13 +184,14 @@ func main() {
 	boot.Seeds = append(boot.Seeds, splitCSV(*seedAddr)...)
 	// Pull the live seed list published over HTTPS (e.g. pasichdev.xyz) so
 	// new nodes find peers without a binary upgrade. Best-effort: failures
-	// are silent and the node falls back to -seed / DNS / DHT. Disable with
-	// -http-seeds=false (e.g. for air-gapped or private networks).
+	// are silent and the node falls back to -seed / DNS. Off unless
+	// -http-seeds is given.
 	if *httpSeeds {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		boot.Seeds = append(boot.Seeds, p2p.ResolveHTTPSeedStrings(ctx, *networkName)...)
-		cancel()
+		seedCtx, seedCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		boot.Seeds = append(boot.Seeds, p2p.ResolveHTTPSeedStringsOpts(seedCtx, *networkName, p2p.SeedOptions{AllowPrivate: *allowPriv})...)
+		seedCancel()
 	}
+	boot.AllowPrivateSeeds = *allowPriv
 	boot.Relays = append(boot.Relays, splitCSV(*relayAddr)...)
 	node.Bootstrap(boot)
 
@@ -169,43 +210,62 @@ func main() {
 		Miner:         mn,
 		Version:       "0.1.0-nosox",
 		DaemonContext: ctx, // long-lived daemon ctx for mining workers
-		Token:         *rpcToken,
+		Token:         rpcToken,
+		CORSOrigin:    *corsOrigin,
+		AllowedHosts:  splitCSV(*allowedHost),
 		GenesisConfig: &gCfg,
+		BroadcastTx:   node.BroadcastTx, // gossip transactions accepted via submittransaction
 	}
-	httpSrv := &http.Server{Addr: *rpcAddr, Handler: rpcSvc.HTTPHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
-	rpcTLS := *rpcTLSCert != "" && *rpcTLSKey != ""
-	go func() {
-		var err error
-		if rpcTLS {
-			// In-node HTTPS: lets browser apps served over HTTPS (e.g. the
-			// GitHub-Pages explorer) talk to the node directly without hitting
-			// the mixed-content block — no separate reverse proxy needed.
-			err = httpSrv.ListenAndServeTLS(*rpcTLSCert, *rpcTLSKey)
-		} else {
-			err = httpSrv.ListenAndServe()
-		}
-		if err != nil && err != http.ErrServerClosed {
-			logger.Printf("rpc: %v", err)
-		}
-	}()
+	httpSrv := rpcSvc.NewServer(*rpcAddr) // carries the timeouts and the HTTP/2 stream cap
+	// Bind before announcing anything: a port already taken, or an unusable
+	// certificate, must stop the node, not leave it running without RPC while
+	// another local process answers on the port.
+	rpcLn, rpcTLSConfig, err := rpcListener(*rpcAddr, *rpcTLSCert, *rpcTLSKey)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	rpcErr := serveRPC(httpSrv, rpcLn, rpcTLSConfig)
 	scheme := "http"
-	if rpcTLS {
+	if rpcTLSConfig != nil {
 		scheme = "https"
 	}
-	logger.Printf("JSON-RPC on %s://%s", scheme, *rpcAddr)
+	logger.Printf("JSON-RPC on %s://%s", scheme, rpcLn.Addr())
 
 	if *doMine {
-		if err := mn.Start(ctx, *mineThreads, *mineReward); err != nil {
-			logger.Printf("miner start: %v", err)
+		if *mineThreads < 1 || *mineThreads > miner.MaxThreads {
+			logger.Fatalf("-threads must be between 1 and %d", miner.MaxThreads)
+		}
+		if *soloMine {
+			if err := mn.Start(ctx, *mineThreads, *mineReward); err != nil {
+				logger.Fatalf("miner start: %v", err)
+			}
+			logger.Printf("miner started (solo) with %d threads, reward=%s", *mineThreads, *mineReward)
 		} else {
-			logger.Printf("miner started with %d threads, reward=%s", *mineThreads, *mineReward)
+			// The gate is the miner's, not a one-time wait: it is re-checked before
+			// every block and also covers mining started later over RPC.
+			if err := mn.Start(ctx, *mineThreads, *mineReward); err != nil {
+				logger.Fatalf("miner start: %v", err)
+			}
+			logger.Printf("miner started with %d threads, reward=%s (it idles while the node is not synced with a peer; use -solo-mine for a single-node network)", *mineThreads, *mineReward)
 		}
 	}
 
-	sig := make(chan os.Signal, 1)
+	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	select {
+	case <-sig:
+	case err := <-rpcErr:
+		// The node cannot do its job without RPC: shut down cleanly, but exit
+		// non-zero so a supervisor (systemd Restart=on-failure) restarts it.
+		logger.Printf("rpc server stopped: %v", err)
+		exitCode = 1
+	}
 	logger.Printf("shutting down")
+	go func() { // a second signal aborts a shutdown that hangs
+		<-sig
+		logger.Printf("second signal: exiting immediately")
+		os.Exit(1)
+	}()
 	cancel()
 	<-maintenanceDone
 
@@ -262,15 +322,16 @@ func splitCSV(s string) []string {
 	return out
 }
 
-// Unauthenticated administration is restricted to an explicit numeric loopback.
-func validateRPCBind(addr, token string) error {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("invalid RPC bind: %w", err)
-	}
-	ip := net.ParseIP(host)
-	if token == "" && (ip == nil || !ip.IsLoopback()) {
-		return fmt.Errorf("non-loopback RPC requires -rpc-token")
-	}
-	return nil
+// syncGate is what mining depends on: at least one connected peer, and a node
+// that considers itself synced with them.
+type syncGate interface {
+	PeerCount() int
+	Synced() bool
+}
+
+// minerGate turns a node into the miner's gate. The miner calls it before every
+// block, so a node that falls behind (or loses its peers) stops mining, and a
+// miner started later over RPC is held to the same rule.
+func minerGate(g syncGate) func() bool {
+	return func() bool { return g.PeerCount() > 0 && g.Synced() }
 }

@@ -1,5 +1,0 @@
---- FAIL: TestCandidateRequiresRewardKeyStore (0.00s)
-    hardening_test.go:12: chain: body roots mismatch
-FAIL
-FAIL	github.com/noso-project/noso-go/v2/miner	0.004s
-FAIL

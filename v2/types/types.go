@@ -1,15 +1,11 @@
 // Package types defines the canonical on-chain data structures for
-// Noso v2. The protocol is a Mimblewimble variant with legacy compat:
+// NosoX. The protocol is a Mimblewimble variant:
 //
-//   - Native outputs are Pedersen commitments + range proofs. The actual
+//   - Outputs are Pedersen commitments + range proofs. The actual
 //     amount is never revealed on chain.
-//   - Legacy outputs (only at genesis) wrap an original Pascal Noso
-//     account (address hash + balance). They are spendable by signing
-//     with the original secp256k1 ECDSA key, after which they convert
-//     into native commitments via the normal MW spend path.
 //   - Kernels carry the public commitment excess, signature, fee, and
-//     a feature flag. Cut-through eliminates intermediate
-//     outputs/kernels over time.
+//     a feature flag. There is no cut-through: every kernel and output
+//     stays in its block.
 //
 // Serialization is canonical — a hash of the marshaled bytes is the
 // identity. Always write fields in declaration order, big-endian
@@ -19,8 +15,6 @@ package types
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
-	"io"
 )
 
 // Hash is a 32-byte SHA-256 digest used as identity for blocks,
@@ -57,18 +51,10 @@ type Commitment [33]byte
 type Output struct {
 	Features OutputFeatures
 	Commit   Commitment
-	// RangeProof is omitted for COINBASE outputs (which still must be
-	// validated against block reward) and for LEGACY outputs (which
-	// carry an explicit amount). For PLAIN outputs it MUST be present.
+	// RangeProof is omitted for COINBASE outputs, whose value is fixed by
+	// consensus (block reward plus the block's kernel fees). For PLAIN outputs it
+	// MUST be present.
 	RangeProof []byte
-	// Legacy-only fields. Populated when Features ∈ {Legacy, LegacyGVT}.
-	LegacyAddress string // original Pascal "N…" address
-	LegacyAmount  int64  // base units (8 decimals) — for GVTs equals GVTBaseValue
-	// GVTNumber is populated only when Features == LegacyGVT. The number
-	// is the original v1 GVT slot (00..99); it doubles as the
-	// non-fungible identifier so that transfers preserve identity rather
-	// than just value.
-	GVTNumber uint8
 }
 
 // OutputFeatures enumerates output kinds.
@@ -82,49 +68,22 @@ const (
 	// produced by the miner). Subject to a maturity lock of CoinbaseLock
 	// blocks before it can be spent.
 	OutputFeaturesCoinbase OutputFeatures = 1
-	// OutputFeaturesLegacy marks an output carried forward from the v1
-	// sumary.psk via the genesis bundler. It records an old-Noso
-	// address + balance and is spendable only by signing with the
-	// original secp256k1 ECDSA key. Once spent, the resulting outputs
-	// are normal MW commitments and the legacy identity is dropped.
-	OutputFeaturesLegacy OutputFeatures = 2
-	// OutputFeaturesLegacyGVT marks one of the 100 governance tokens
-	// inherited from v1 gvts.psk. Identity (the GVTNumber 00..99) is
-	// preserved on transfer; on redeem the output spends for
-	// GVTBaseValue base units (70 NOSO) into a regular MW commitment.
-	// Spend requires the original v1 owner's secp256k1 signature, same
-	// as legacy balance UTXOs.
-	OutputFeaturesLegacyGVT OutputFeatures = 3
-	// OutputFeaturesDevFund marks the per-block transparent dev-fund output:
-	// a value-known commitment F·H + DevFundPoint + t·G where F is the block's total
-	// kernel fee. At most one per block; only present when F > 0. See
-	// devfund.go and docs/v2/DEVFUND.md.
-	OutputFeaturesDevFund OutputFeatures = 4
+	// Value 2 is deliberately unassigned. An earlier draft used it for a
+	// dev-fund output; that output was removed before launch and the number is
+	// not reused, so any output or input carrying feature 2 is rejected.
 )
-
-// GVTBaseValue is the NOSO-equivalent value of one inherited v1 GVT
-// at redeem time, in base units (8 decimals). Matches the v1
-// `GVTBaseValue` constant in nosogvts.pas.
-const GVTBaseValue int64 = 70_000_000_000
 
 // Input references an output being spent.
 type Input struct {
 	Features OutputFeatures
 	Commit   Commitment
-	// Legacy fields authorize a v4 one-source, one-output, one-kernel claim leg.
-	// LegacySig is canonical Base64 DER ECDSA-SHA256 under the historical
-	// key text, bound to network, genesis, trusted source and linked IDs.
-	LegacySig      string
-	LegacyAddr     string // copy of the legacy address that owned this output
-	LegacyAmount   int64  // explicit amount (so the kernel can verify balance)
-	LegacyPubKey   string // canonical historical Base64 uncompressed public-key text
-	LegacyOutputID Hash   // exact destination Plain output
-	LegacyKernelID Hash   // exact zero-fee, zero-lock LegacyClaim kernel
 }
 
 // Kernel binds inputs and outputs together with a signature over the
-// excess (sum-of-output-commits − sum-of-input-commits − fee·H). The
-// signature proves the spender knew the blinding factors.
+// excess (sum-of-output-commits − sum-of-input-commits + fee·H, which equals
+// the excess point of a balanced transaction). The signature proves the
+// spender knew the blinding factors. A coinbase kernel's excess is instead the
+// coinbase output commitment itself (value included) and its Fee is zero.
 type Kernel struct {
 	Features KernelFeatures
 	Fee      uint64
@@ -145,14 +104,10 @@ type KernelFeatures uint8
 const (
 	KernelFeaturesPlain    KernelFeatures = 0
 	KernelFeaturesCoinbase KernelFeatures = 1
-	// KernelFeaturesLegacyClaim is used when a transaction's only role
-	// is to spend a single legacy output into native outputs. Carries
-	// no fee (the network forgives the dust to incentivize migration).
-	KernelFeaturesLegacyClaim KernelFeatures = 2
 )
 
-// Transaction is the basic unit submitted to the mempool. Inputs and
-// outputs must sum (commitment-wise) to the excess plus fee·H.
+// Transaction is the basic unit submitted to the mempool. Outputs minus
+// inputs plus fee·H must equal the sum of the kernel excesses (commitment-wise).
 type Transaction struct {
 	Inputs  []Input
 	Outputs []Output
@@ -183,18 +138,26 @@ type Block struct {
 	Kernels []Kernel
 }
 
-// Genesis settings — defaults for the canonical Noso v2 launch.
-// Forkers can override these via a config file before generating their
-// own genesis.
+// Genesis settings: network magic values for the NosoX networks.
 const (
 	NetworkMagicMainnet uint32 = 0x4e4f5832 // "NOX2"
 	NetworkMagicTestnet uint32 = 0x4e4f5854 // "NOXT"
 
-	// Version 3 hard-forks the block-context dev-fund blinding rule.
-	BlockVersion uint32 = 4
+	// BlockVersion is the only accepted block format. Version 5 removed all
+	// allocation-carrying outputs: genesis is empty and every coin is mined.
+	BlockVersion uint32 = 5
 
 	// TargetBlockTime is the desired interval between blocks.
 	TargetBlockTimeSeconds int64 = 120
+
+	// MaxFutureDriftSeconds is how far ahead of the validator's clock a block
+	// timestamp may be. Chosen by simulation with the real difficulty
+	// algorithm (v2/pow TestTimeWarpFutureLimit).
+	MaxFutureDriftSeconds int64 = 540
+
+	// MedianTimeSpan is the number of ancestors whose median timestamp a new
+	// block must exceed.
+	MedianTimeSpan = 11
 
 	// CoinbaseLock is the number of confirmations before a coinbase
 	// output can be spent. Standard Bitcoin/Grin practice.
@@ -207,21 +170,20 @@ const (
 	// difficulty and ramp up. 1 means "any non-zero hash works".
 	MinDifficulty uint64 = 1
 
-	// Base units per coin (8 decimals — same as v1 for continuity).
+	// Base units per coin (8 decimals).
 	CoinUnits int64 = 100_000_000
 
-	// Reward schedule mirrors v1 for continuity.
+	// Reward schedule.
 	InitialReward        int64  = 5_000_000_000
 	BlockHalvingInterval uint64 = 210_000
 	HalvingSteps         uint64 = 10
 )
 
 // BlockReward returns the coinbase reward for a given block height.
-// Halving schedule matches the v1 chain so total emission stays
-// predictable for holders.
+// The genesis block has no reward; issuance starts at height 1.
 func BlockReward(height uint64) int64 {
 	if height == 0 {
-		// Genesis is special: no coinbase, only legacy outputs.
+		// Genesis carries no outputs at all.
 		return 0
 	}
 	if height >= BlockHalvingInterval*(HalvingSteps+1) {
@@ -233,7 +195,7 @@ func BlockReward(height uint64) int64 {
 
 // EncodeHeader serializes a BlockHeader for hashing / PoW.
 func EncodeHeader(h *BlockHeader) []byte {
-	buf := make([]byte, 0, 4+8+8+32+32+32+33+8+8)
+	buf := make([]byte, 0, 4+4+8+8+32+32+32+33+8+8)
 	buf = binary.BigEndian.AppendUint32(buf, h.Version)
 	buf = binary.BigEndian.AppendUint32(buf, h.NetworkMagic)
 	buf = binary.BigEndian.AppendUint64(buf, h.Height)
@@ -255,7 +217,7 @@ func HeaderID(h *BlockHeader) Hash {
 
 // EncodeKernel returns the canonical kernel-hash preimage.
 func EncodeKernel(k *Kernel) []byte {
-	buf := []byte("NosoX/kernel/v2\x00")
+	buf := []byte("NosoX/kernel/v5\x00")
 	buf = append(buf, byte(k.Features))
 	buf = binary.BigEndian.AppendUint64(buf, k.Fee)
 	buf = binary.BigEndian.AppendUint64(buf, k.LockHeight)
@@ -268,40 +230,31 @@ func KernelID(k *Kernel) Hash {
 	return sha256.Sum256(EncodeKernel(k))
 }
 
+// KernelSigningMessage returns the message a plain kernel signature covers:
+// SHA256("NosoX/kernel-sig/v5\x00" || BE32(magic) || KernelID). Binding the
+// network magic keeps a signature made for one network from validating on
+// another. KernelID is derived from the kernel itself (ExcessSig is not
+// part of it), so a signer may call this before the signature exists.
+func KernelSigningMessage(magic uint32, k *Kernel) []byte {
+	id := KernelID(k)
+	h := sha256.New()
+	h.Write([]byte("NosoX/kernel-sig/v5\x00"))
+	var m [4]byte
+	binary.BigEndian.PutUint32(m[:], magic)
+	h.Write(m[:])
+	h.Write(id[:])
+	return h.Sum(nil)
+}
+
 // EncodeOutput returns a canonical preimage for hashing.
 func EncodeOutput(o *Output) []byte {
-	buf := []byte("NosoX/output/v2\x00")
+	buf := []byte("NosoX/output/v5\x00")
 	buf = append(buf, byte(o.Features))
 	buf = append(buf, o.Commit[:]...)
-	buf = appendField(buf, o.RangeProof)
-	buf = appendField(buf, []byte(o.LegacyAddress))
-	buf = binary.BigEndian.AppendUint64(buf, uint64(o.LegacyAmount))
-	return append(buf, o.GVTNumber)
+	return appendField(buf, o.RangeProof)
 }
 
 // OutputID returns SHA-256 of the canonical preimage.
 func OutputID(o *Output) Hash {
 	return sha256.Sum256(EncodeOutput(o))
-}
-
-// WriteVarBytes is a length-prefix helper used by the wire encoders.
-// 4-byte length prefix is more than enough for any field we send.
-func WriteVarBytes(w io.Writer, b []byte) error {
-	if len(b) > 1<<24 {
-		return fmt.Errorf("v2/types: oversize var-bytes (%d)", len(b))
-	}
-	var lp [4]byte
-	binary.BigEndian.PutUint32(lp[:], uint32(len(b)))
-	if _, err := w.Write(lp[:]); err != nil {
-		return err
-	}
-	_, err := w.Write(b)
-	return err
-}
-
-// LegacySpendMessage returns the canonical bytes a legacy spender must
-// sign with their original secp256k1 ECDSA key.
-func LegacySpendMessage(legacyAddr string, commit Commitment, blockHeight uint64) []byte {
-	msg := fmt.Sprintf("NOSOX-LEGACY-SPEND %s %x %d", legacyAddr, commit[:], blockHeight)
-	return []byte(msg)
 }

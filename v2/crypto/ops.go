@@ -27,8 +27,8 @@ func PointSubtract(a, b [33]byte) ([33]byte, error) {
 	return compress(rx, ry), nil
 }
 
-// PointAdd returns a + b on secp256k1, encoded as compressed points. Used to
-// build the transparent dev-fund commitment and its public blinding tweak.
+// PointAdd returns a + b on secp256k1, encoded as compressed points. Used by
+// the payment protocol to combine public excesses and nonces.
 func PointAdd(a, b [33]byte) ([33]byte, error) {
 	curve := Curve()
 	ax, ay, err := decompress(a)

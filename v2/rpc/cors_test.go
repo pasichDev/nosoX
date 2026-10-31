@@ -8,41 +8,54 @@ import (
 	"testing"
 )
 
-// A browser wallet/explorer on another origin must be able to send a
-// Bearer token to a remote node. That requires Authorization in the CORS
-// preflight allow-list — this guards the "connect from outside over RPC" path.
-func TestCORSPreflightAllowsAuthorization(t *testing.T) {
-	s := newSvcWithToken("tok")
+// By default no CORS headers are sent at all, so no web page can read a
+// response from the node.
+func TestNoCORSHeadersByDefault(t *testing.T) {
+	h := newSvcWithToken("tok").HTTPHandler()
+	req := httptest.NewRequest(http.MethodOptions, "/", nil)
+	req.Host = "127.0.0.1"
+	req.Header.Set("Origin", "https://wallet.example")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	for k := range rec.Header() {
+		if strings.HasPrefix(k, "Access-Control") {
+			t.Fatalf("unexpected CORS header %s on preflight", k)
+		}
+	}
+	resp := post(t, h, `{"jsonrpc":"2.0","method":"version","id":1}`, "")
+	if resp.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatal("CORS header on POST response by default")
+	}
+}
+
+// An explicitly configured origin gets exactly that origin back, with the
+// Authorization header allowed so a remote browser wallet can authenticate.
+func TestConfiguredCORSOrigin(t *testing.T) {
+	s := &Service{Token: "tok", CORSOrigin: "https://wallet.example"}
 	h := s.HTTPHandler()
 	req := httptest.NewRequest(http.MethodOptions, "/", nil)
 	req.Header.Set("Origin", "https://wallet.example")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("preflight status = %d, want 204", rec.Code)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "https://wallet.example" {
+		t.Fatalf("preflight: %d %v", rec.Code, rec.Header())
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
-		t.Fatalf("allow-origin = %q, want *", got)
+	if !strings.Contains(strings.ToLower(rec.Header().Get("Access-Control-Allow-Headers")), "authorization") {
+		t.Fatal("Authorization not allowed")
 	}
-	allow := rec.Header().Get("Access-Control-Allow-Headers")
-	if !strings.Contains(strings.ToLower(allow), "authorization") {
-		t.Fatalf("allow-headers %q must include Authorization for remote auth", allow)
-	}
-}
-
-func TestCORSHeadersOnPost(t *testing.T) {
-	s := newSvcWithToken("")
-	h := s.HTTPHandler()
-	resp := post(t, h, `{"jsonrpc":"2.0","method":"version","id":1}`, "")
-	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
-		t.Fatal("missing CORS header on POST response")
+	req = httptest.NewRequest(http.MethodOptions, "/", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatal("foreign origin allowed")
 	}
 }
 
 func TestNonPostRejected(t *testing.T) {
 	s := newSvcWithToken("")
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "127.0.0.1"
 	rec := httptest.NewRecorder()
 	s.HTTPHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -53,8 +66,10 @@ func TestNonPostRejected(t *testing.T) {
 func TestInvalidJSON(t *testing.T) {
 	s := newSvcWithToken("")
 	resp := post(t, s.HTTPHandler(), `{not json`, "")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 with JSON-RPC error", resp.StatusCode)
+	// A malformed request is a transport-level failure: HTTP 400 with the
+	// JSON-RPC parse-error code (it used to be HTTP 200 carrying code 401).
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 with JSON-RPC error", resp.StatusCode)
 	}
 	body := new(bytes.Buffer)
 	_, _ = body.ReadFrom(resp.Body)
@@ -86,6 +101,7 @@ func TestVersionMethod(t *testing.T) {
 func TestHealthEndpoint(t *testing.T) {
 	s := newSvcWithToken("")
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Host = "127.0.0.1"
 	rec := httptest.NewRecorder()
 	s.HTTPHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {

@@ -25,7 +25,7 @@ func TestMineAndValidateCoinbase(t *testing.T) {
 		Timestamp:         time.Now().Unix() - 600,
 		InitialDifficulty: 1, // any hash wins; PoW is exercised but quick
 	}
-	gBlock, _, _, err := genesis.Build(gCfg)
+	gBlock, err := genesis.Build(gCfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,12 +49,12 @@ func TestSecuritySuffixOverlayExactUndoAndHistory(t *testing.T) {
 	a[0] = 1
 	b[0] = 2
 	c[0] = 3
-	original := types.Output{Commit: a, Features: types.OutputFeaturesLegacy, LegacyAddress: "legacy-owner", LegacyAmount: 123, RangeProof: []byte{4, 5, 6}}
+	original := types.Output{Commit: a, Features: types.OutputFeaturesPlain, RangeProof: []byte{4, 5, 6}}
 	g := &types.Block{Outputs: []types.Output{original}}
 	if err := s.WriteBlock(g); err != nil {
 		t.Fatal(err)
 	}
-	old := &types.Block{Header: types.BlockHeader{Height: 1, PrevHash: types.HeaderID(&g.Header)}, Inputs: []types.Input{{Commit: a, Features: original.Features, LegacyAddr: original.LegacyAddress, LegacyAmount: original.LegacyAmount}}, Outputs: []types.Output{{Commit: b, RangeProof: []byte{7}}}, Kernels: []types.Kernel{{Excess: b}}}
+	old := &types.Block{Header: types.BlockHeader{Height: 1, PrevHash: types.HeaderID(&g.Header)}, Inputs: []types.Input{{Commit: a, Features: original.Features}}, Outputs: []types.Output{{Commit: b, RangeProof: []byte{7}}}, Kernels: []types.Kernel{{Excess: b}}}
 	if err := s.WriteBlock(old); err != nil {
 		t.Fatal(err)
 	}
@@ -74,9 +74,9 @@ func TestSecuritySuffixOverlayExactUndoAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, ok := f.UTXOByLegacyAddress(original.LegacyAddress)
+	restored, ok := f.UTXOByCommit(a)
 	if !ok || !reflect.DeepEqual(*restored, original) {
-		t.Fatal("rollback lost legacy metadata")
+		t.Fatal("rollback lost output metadata")
 	}
 	if f.HasOutput(b) || f.HasKernel(types.KernelID(&old.Kernels[0])) {
 		t.Fatal("orphan identity remains in overlay")
@@ -91,7 +91,7 @@ func TestSecuritySuffixOverlayExactUndoAndHistory(t *testing.T) {
 	if err := s.ReplaceSuffix(0, []*types.Block{replacement}); err != nil {
 		t.Fatal(err)
 	}
-	restored, ok = s.UTXOByLegacyAddress(original.LegacyAddress)
+	restored, ok = s.UTXOByCommit(a)
 	if !ok || !reflect.DeepEqual(*restored, original) {
 		t.Fatal("commit lost restored metadata")
 	}

@@ -16,7 +16,7 @@ func FuzzBlockDecode(f *testing.F) {
 	good := &types.Block{Header: types.BlockHeader{Height: 1, Nonce: 7}}
 	var buf bytes.Buffer
 	_ = gob.NewEncoder(&buf).Encode(good)
-	// Preserve the historical gob fixture as a rejected migration seed.
+	// Preserve the historical gob fixture as a rejected seed.
 	f.Add(buf.Bytes())
 	valid, _ := encodeBlockMsg(good)
 	f.Add(valid)
@@ -32,7 +32,7 @@ func FuzzTxDecode(f *testing.F) {
 	good := &types.Transaction{}
 	var buf bytes.Buffer
 	_ = gob.NewEncoder(&buf).Encode(good)
-	// Preserve the historical gob fixture as a rejected migration seed.
+	// Preserve the historical gob fixture as a rejected seed.
 	f.Add(buf.Bytes())
 	valid, _ := encodeTxMsg(good)
 	f.Add(valid)

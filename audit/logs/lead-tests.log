@@ -1,6 +1,0 @@
-ok  	github.com/noso-project/noso-go/v2/genesis	0.328s
-ok  	github.com/noso-project/noso-go/v2/miner	0.638s
-ok  	github.com/noso-project/noso-go/v2/types	(cached)
-ok  	github.com/noso-project/noso-go/v2/pow	(cached)
-ok  	github.com/noso-project/noso-go/internal/crypto	0.011s
-ok  	github.com/noso-project/noso-go/internal/blockchain	0.011s

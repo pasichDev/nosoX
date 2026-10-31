@@ -20,7 +20,7 @@ func storePoint(t *testing.T, n byte) types.Commitment {
 	return c
 }
 
-// These are storage-only fixtures: the initial legacy allocation is explicit,
+// These are storage-only fixtures: the initial raw output is explicit,
 // while subsequent raw deltas intentionally do not claim subsidy/proof/signature
 // validity. The Store must protect its indices even from a mistaken trusted caller.
 func TestSecurityStoreRejectsImpossibleDeltas(t *testing.T) {
@@ -33,12 +33,6 @@ func TestSecurityStoreRejectsImpossibleDeltas(t *testing.T) {
 		},
 		"input feature": func(b *types.Block, a, existing, fresh types.Commitment, k types.Kernel) {
 			b.Inputs = []types.Input{{Commit: existing, Features: types.OutputFeaturesCoinbase}}
-		},
-		"input address": func(b *types.Block, a, existing, fresh types.Commitment, k types.Kernel) {
-			b.Inputs = []types.Input{{Commit: existing, LegacyAddr: "forged"}}
-		},
-		"input amount": func(b *types.Block, a, existing, fresh types.Commitment, k types.Kernel) {
-			b.Inputs = []types.Input{{Commit: existing, LegacyAmount: 1}}
 		},
 		"duplicate output": func(b *types.Block, a, existing, fresh types.Commitment, k types.Kernel) {
 			b.Outputs = []types.Output{{Commit: fresh}, {Commit: fresh}}
@@ -68,13 +62,13 @@ func TestSecurityStoreRejectsImpossibleDeltas(t *testing.T) {
 			backendChains(t, func(t *testing.T, c *Chain, dir string) {
 				a, existing, fresh := storePoint(t, 1), storePoint(t, 2), storePoint(t, 3)
 				g := easyGenesisBlock(t)
-				g.Outputs = []types.Output{{Features: types.OutputFeaturesLegacy, Commit: a, LegacyAddress: "Nfixture", LegacyAmount: 10}}
+				g.Outputs = []types.Output{{Features: types.OutputFeaturesPlain, Commit: a}}
 				types.SetBlockRoots(g)
 				if err := c.store.WriteBlock(g); err != nil {
 					t.Fatal(err)
 				}
 				kernel := types.Kernel{Excess: storePoint(t, 4)}
-				first := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Inputs: []types.Input{{Features: types.OutputFeaturesLegacy, Commit: a, LegacyAddr: "Nfixture", LegacyAmount: 10}}, Outputs: []types.Output{{Commit: existing}}, Kernels: []types.Kernel{kernel}}
+				first := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Inputs: []types.Input{{Features: types.OutputFeaturesPlain, Commit: a}}, Outputs: []types.Output{{Commit: existing}}, Kernels: []types.Kernel{kernel}}
 				if err := c.store.WriteBlock(first); err != nil {
 					t.Fatal(err)
 				}
@@ -128,7 +122,7 @@ func TestSecurityStoreBadgerDecodeFailureUnchanged(t *testing.T) {
 			defer s.Close()
 			commit := storePoint(t, 1)
 			g := easyGenesisBlock(t)
-			g.Outputs = []types.Output{{Features: types.OutputFeaturesLegacy, Commit: commit, LegacyAddress: "Nfixture", LegacyAmount: 10}}
+			g.Outputs = []types.Output{{Features: types.OutputFeaturesPlain, Commit: commit}}
 			types.SetBlockRoots(g)
 			if err := s.WriteBlock(g); err != nil {
 				t.Fatal(err)
@@ -141,7 +135,7 @@ func TestSecurityStoreBadgerDecodeFailureUnchanged(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := rawBadgerEntries(t, s)
-			b := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Inputs: []types.Input{{Features: types.OutputFeaturesLegacy, Commit: commit, LegacyAddr: "Nfixture", LegacyAmount: 10}}}
+			b := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Inputs: []types.Input{{Features: types.OutputFeaturesPlain, Commit: commit}}}
 			if err := s.WriteBlock(b); err == nil {
 				t.Fatal("decode/read error authorized a delta")
 			}

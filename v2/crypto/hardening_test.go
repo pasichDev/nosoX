@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-func TestRejectLegacyShapeOnlyRangeProof(t *testing.T) {
+func TestRejectShapeOnlyRangeProof(t *testing.T) {
 	one := make([]byte, 32)
 	one[31] = 1
 	c, _ := PedersenCommit(5, one)
 	proof := make([]byte, 33)
 	proof[0] = 1
 	if VerifyRange(c, proof) {
-		t.Fatal("accepted arbitrary legacy shape without a range witness")
+		t.Fatal("accepted arbitrary proof shape without a range witness")
 	}
 }
 func TestRejectIdentityPublicKeyForgery(t *testing.T) {

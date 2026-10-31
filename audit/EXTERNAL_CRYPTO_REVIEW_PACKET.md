@@ -1,59 +1,71 @@
-# Independent cryptographic review packet
+# External cryptographic review packet
 
-Status: **REQUIRED EXTERNAL EVIDENCE, NOT COMPLETED**. This packet scopes work;
-it does not constitute an independent assessment or an approval. No auditor has
-been contacted or commissioned, and no code or findings were published.
+Status: **not started.** No reviewer has been contacted or commissioned. This
+document scopes the work. It is not an assessment and not an approval.
 
-Review source on `security/consensus-hardening`, manifest
-`BLOCKERS_V4_SOURCE.sha256`, together with exact results under
-`logs/blockers-v4-final/`. The commit containing that source can be obtained from
-local Git history. There are no new cryptographic dependencies in this revision:
-the claim verifier uses the already pinned Decred secp256k1/ECDSA implementation.
+The reviewed revision must be a specific commit named by the maintainer when a
+review is commissioned. Dependencies relevant to the cryptography are pinned in
+`go.mod`: `github.com/btcsuite/btcd/btcec/v2`,
+`github.com/decred/dcrd/dcrec/secp256k1/v4` and `golang.org/x/crypto`.
 
-## Required review scope
+## Scope
 
-1. `v2/crypto/{pedersen,schnorr,schnorr_ct,rangeproof,borromean}.go` and associated
-   scalar/point encoding and `borromean_ct.go` helpers: generator derivation and unknown-log
-   assumption, identity rejection, canonical scalar/point parsing, complete
-   commitment algebra, exact Schnorr challenge transcript, nonce handling,
-   domain separation and signature malleability. Do not assume BIP340 compatibility.
-2. Custom bit-decomposition OR range proofs: published mathematical construction
-   correspondence, Fiat–Shamir transcript binding, statement soundness, bit
-   commitments, boundary values, proof composition and amount range. Shape and
-   round-trip tests are insufficient. Decide whether to retain the construction
-   after review or migrate explicitly to an established reviewed implementation.
-3. All secret-dependent paths, including Decred public-key derivation calls,
-   `big.Int`, wallet blinding/key generation, imported keys and kernel signing.
-   Constant-time function names do not establish constant-time execution.
-   NX-019 remains open; signing/proving must not be represented as side-channel
-   hardened. Functional tests cannot close this gate.
-4. `v2/legacyclaim`, `v2/chain/legacy_claim.go` and
-   `v2/wallet/legacy_claim_v4.go`: exact new SHA256/strict-DER/low-S procedure,
-   historical text-address derivation, trusted source selection, claim-leg
-   context, aggregation/replay and cross-network/genesis binding. Historical
-   SHA1 transaction signatures are not accepted by this new procedure.
-5. Header/body/ID domains, coinbase transcript, version3 fee tweak, unsupported
-   offsets and conservation across complete chain validation. Assess native
-   kernel signing intent/reuse across network contexts separately from block
-   network binding. Do not infer intent guarantees from header magic alone.
+1. **Primitives** in `v2/crypto/`: `pedersen.go`, `schnorr.go`, `schnorr_ct.go`,
+   `ops.go`, `rangeproof.go`, `borromean.go`, `borromean_ct.go`.
+   - Derivation of the second generator `H` and the assumption that its
+     discrete log relative to `G` is unknown.
+   - Identity rejection, canonical scalar and point parsing, commitment algebra.
+   - The exact Schnorr challenge transcript, nonce handling, domain separation,
+     and signature malleability. The signature is not BIP340 compatible and
+     must not be assumed to be.
+2. **The range proof.** It is a custom bit-decomposition proof: 64 per-bit
+   Pedersen commitments, each with a Fiat-Shamir OR proof. Review questions:
+   correspondence to a published construction, transcript binding, soundness
+   and zero-knowledge, bit commitments, boundary values, composition across
+   multiple proofs, and the permitted amount range. Shape and round-trip tests
+   are not sufficient. Decide whether to keep the construction or replace it
+   with an established, reviewed one.
+3. **Secret-dependent paths.** Signing, proving, key and blinding generation,
+   and the wallet. The Schnorr signing function is named `SchnorrSignConstantTime`
+   for historical reasons. It is not constant time: the Decred
+   `PrivateKey.PubKey` call it relies on uses a non-constant-time base
+   multiplication. Finding NX-019 stays open until a reviewed implementation
+   exists.
+4. **Domains and transcripts** across the protocol: header, body roots, output,
+   kernel and transaction IDs, the coinbase signing transcript and
+   the slate signing hashes. In particular:
+   - the coinbase signing hash is `SHA-256("NosoX/coinbase-kernel/v5\0" ||
+     BE32(network magic) || BE64(height) || BE64(amount) || commitment)`;
+   - the Schnorr challenge domain is `NosoX/schnorr/v5\0`, a plain prefix of
+     `R || P || len(msg) || msg`;
+   - plain kernel signatures sign `types.KernelSigningMessage`:
+     `SHA-256("NosoX/kernel-sig/v5\0" || BE32(network magic) || kernel ID)`.
+   Assess whether signing intent can be replayed across network contexts. Do not
+   infer intent guarantees from the header network field alone.
+5. **Conservation** across complete chain validation: the balance equation,
+   the coinbase check (value = subsidy plus the block's fees, also after
+   emission ends).
 
 ## Existing evidence and its limits
 
-The crypto tests contain independently constructed arithmetic vectors, strict
-encoding negatives, modified proof/signature transcripts and actual chain-entry
-rejection tests. `legacyclaim/claim_test.go` pins synthetic key/address/digest/DER
-vectors; chain tests exercise both backends, restart and reorg with real proofs.
-The complete test/race runs are finite behavioral evidence. No independent
-proof-system interoperability suite, formal soundness proof, timing assurance
-or external cryptographic conclusion is supplied here.
+- `v2/crypto/reference_test.go` checks Pedersen, generator and Schnorr values
+  against independently computed constants. `audit/reference_vectors.py`
+  reproduces them with plain affine integer arithmetic.
+- Tests cover strict encodings, mutated proofs and signatures, and rejection
+  at chain entry through `AddBlock`.
+- Fuzz targets: `FuzzVerifyRangeBorromean` and `FuzzSchnorrVerify`
+  (`v2/crypto`), `FuzzTransactionEncoding` (`v2/types`), `FuzzSlatepackDecode`
+  (`v2/wallet`), `FuzzBlockDecode` and `FuzzTxDecode` (`v2/p2p`).
 
-## Evidence required to close the external gate
+This is behavioral evidence from finite runs. There is no interoperability
+suite against a reference implementation, no formal soundness argument and no
+timing analysis.
 
-An identifiable independent reviewer must deliver a dated report for a precise
-source revision, with assumptions, construction references, test vectors,
-findings/severity, remediation review and explicit residual limits. All High or
-Critical findings must return to remediation and executed regression testing.
-Any replacement primitive requires an explicit protocol/serialization/version
-decision; copying a different signature/proof algorithm under the existing name
-would silently break consensus. Mainnet remains disabled pending this and the
-separate economic migration, capacity and durability release gates.
+## What would close the gate
+
+A named, independent reviewer delivers a dated report for a precise commit,
+covering assumptions, construction references, test vectors, findings with
+severity, review of remediations, and residual limits. Every High or Critical
+finding returns to remediation with regression tests. A replacement primitive
+requires an explicit protocol version change; swapping an algorithm under an
+existing name would silently split consensus.

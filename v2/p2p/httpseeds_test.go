@@ -32,7 +32,11 @@ not-a-multiaddr
 	}
 }
 
-func TestResolveHTTPSeeds(t *testing.T) {
+// ResolveHTTPSeeds builds its own client, so a test server certificate cannot
+// be trusted here; the HTTPS success path is covered by
+// TestHTTPSeedAcceptsDirectHTTPS. Through the public entry point a cleartext
+// seed source must yield nothing, even when it serves a valid list.
+func TestResolveHTTPSeedsRefusesCleartext(t *testing.T) {
 	body := "# seeds\n/ip4/198.51.100.7/tcp/7781/p2p/12D3KooWBmwXbZQYZ8s8s9q5jq4dGq4dGq4dGq4dGq4dGq4dGq4d\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(body))
@@ -44,8 +48,8 @@ func TestResolveHTTPSeeds(t *testing.T) {
 	defer func() { HTTPSeedURLs = old }()
 
 	got := ResolveHTTPSeeds(context.Background(), "unittest")
-	if len(got) != 1 {
-		t.Fatalf("want 1 resolved seed, got %d", len(got))
+	if len(got) != 0 {
+		t.Fatalf("cleartext seed source resolved %d seeds", len(got))
 	}
 }
 

@@ -1,85 +1,111 @@
-# NosoX — unsafe research implementation
+# NosoX
 
-> **RESEARCH ONLY. MAINNET BLOCKED. Not independently audited.**
-> This branch contains defensive hardening of an archived prototype. Passing
-> tests do not establish cryptographic soundness or monetary legitimacy.
-> Version4 claims require explicit key ownership and a trusted genesis.
-> Independent cryptographic review, historical migration trust and remaining
-> durability/capacity assurance still block release. Do not hold value,
-> expose this software publicly, or connect it to a public cryptocurrency network.
+[![ci](https://github.com/pasichDev/noso-go/actions/workflows/ci.yml/badge.svg)](https://github.com/pasichDev/noso-go/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-The Go module is `github.com/pasichDev/noso-go`, aligned with the repository
-relocation. Go **1.27.3** is required, as selected from the official
-[stable downloads](https://go.dev/dl/). CI reads the version from `go.mod`.
+NosoX is a Mimblewimble-style chain written in Go. Outputs are Pedersen
+commitments with range proofs, blocks are mined with memory-hard Argon2id, and
+nodes communicate over libp2p. Documentation: <https://pasichdev.github.io/noso-go/>.
 
-The implemented model uses secp256k1 Pedersen commitments, custom Schnorr and
-bit-decomposition OR range proofs, Argon2id PoW, Badger storage and libp2p.
-Ed25519 wallet identities are distinct from output spending scalars. No ASIC,
-GPU, privacy, constant-time or production-readiness guarantee is established.
+NosoX started as a rewrite of the Noso protocol; it is a new chain, no balances
+carry over. Genesis is empty and every coin is mined.
 
-SP-1/2/3 follow-up implementation and exact current results are in
-[audit/SP123_COMPLETION.md](audit/SP123_COMPLETION.md). It adds context-bound fee
-outputs, suffix-only state staging and durable MVCC publication fences. This
-does not establish independent cryptographic or production resource assurance.
+## Status
 
-The latest follow-up is [version4 blocker remediation](audit/BLOCKERS_V4.md).
-MVCC reader tracking permits safe reclamation; persistent startup replay streams
-through a disk-backed verifier. These address concrete defects, without proving
-a universal RAM/disk bound or authenticating historical allocations.
+Experimental. No independent cryptographic audit has taken place. The custom
+Schnorr signature and range proof are unreviewed, and secret-dependent code is
+not constant time. `nosoxd` refuses to start on mainnet. Do not hold value in
+this software.
 
-The current internal assessment and exact evidence are in:
+The wallet spends mined coins with two-party Mimblewimble payments:
+`wallet pay`, `receive` and `finalize` exchange two slates, aggregate the
+kernel signature and submit the transaction with the `submittransaction` RPC.
+Outputs are tracked in an encrypted `<wallet>.outputs` file. Slates are text
+starting `SLATEPACK3.`; `wallet new` needs a passphrase of at least 12
+characters; `wallet receive <wallet> <slate|@file> [node-rpc]` takes the node so
+the wallet can pin its network; an output counts as confirmed after
+`NOSOX_CONFIRMATIONS` blocks (default 10); `wallet pay` takes `<fee|default>`
+and prints the relay minimum fee; `wallet import-coinbase` also reads the
+archived `coinbases.json.<ts>.<n>` key files. See [Wallet](docs/wallet.md) for
+the protocol, nonce safety and the variable-time code that remains.
 
-- [Security findings](audit/SECURITY_AUDIT.md)
-- [Consensus invariants](audit/CONSENSUS_INVARIANTS.md)
-- [Executed tests and limitations](audit/TEST_REPORT.md)
-- [Breaking protocol changes](audit/PROTOCOL_CHANGES.md)
-- [Release gates](audit/RELEASE_READINESS.md)
-- [Migration trust](audit/MIGRATION_TRUST.md)
-- [Threat model and scope](audit/THREAT_MODEL.md)
+## Features
 
-## Reproduce checks locally
+- Protocol version 5: Pedersen commitments on secp256k1, Schnorr kernel
+  signatures, 64-bit range proofs, ordered body roots in the header.
+- Argon2id proof of work (64 MiB), weighted-window difficulty, 120 s target.
+- Fixed emission: 50 coins per block, halving every 210,000 blocks, about
+  20.99 million coins in total. No premine.
+- Block fees go to the miner, in the coinbase. After emission ends (height
+  2,310,000) fees are the only payment. No founder allocation, no protocol fee.
+- Fork choice by accumulated work, atomic reorganization up to 1024 blocks.
+- Badger storage with restart replay and verification.
+- libp2p gossip and sync over TCP and QUIC (wire protocol v6, compact binary).
+- JSON-RPC API with bearer-token access control (token from `NOSOX_RPC_TOKEN`,
+  never a flag) for mining controls and wallet calls; no CORS headers unless
+  `-rpc-cors-origin` is set.
+- Encrypted wallet and output store; two-party payment slates.
+
+## Quick start
+
+Requires Go 1.27.3 or newer.
 
 ```bash
-go version
-go build ./...
+git clone https://github.com/pasichDev/noso-go
+cd noso-go
+go build -o bin/nosoxd ./cmd/nosoxd
+go build -o bin/nosox-cli ./cmd/nosox-cli
+
+# isolated testnet node that mines (loopback only, no seeds)
+bin/nosoxd -data ./nosox-data -mine -solo-mine -threads 2
+```
+
+In another terminal:
+
+```bash
+bin/nosox-cli tip 127.0.0.1:7780
+bin/nosox-cli mine stats 127.0.0.1:7780   # needs NOSOX_RPC_TOKEN if the node has one
+```
+
+Run the tests:
+
+```bash
 go vet ./...
 go test ./...
 go test -race ./...
 ```
 
-The review used `-p 2` to bound concurrent package execution. If your environment
-points Go caches at a read-only directory, set `GOMODCACHE` and `GOCACHE` to
-writable directories; this does not alter module verification.
+## Repository layout
 
-For isolated experiments, use temporary data, loopback listeners, testnet and
-`-http-seeds=false`. The daemon defaults to these restrictions and refuses
-mainnet startup. Automated local multi-node tests are safer starting points:
+| Path | Contents |
+|---|---|
+| `cmd/nosoxd` | Node, miner and RPC daemon. |
+| `cmd/nosox-cli` | Wallet and RPC client. |
+| `v2/` | Library packages: `types`, `crypto`, `pow`, `chain`, `genesis`, `mempool`, `miner`, `wallet`, `p2p`, `rpc`. |
+| `docs/` | Documentation source for the site. |
+| `audit/` | Threat model, consensus invariants, findings, release gates. |
+| `scripts/` | Release build and verification, publication scan. |
+| `seeds/` | Seed list files (currently empty). |
 
-```bash
-go test ./v2/p2p -run 'TestThreeNode|TestPreAdmittedNativeTransactionGossips' -count=1
-```
+## Documentation
 
-## Compatibility and migration
+- [Getting started](docs/getting-started.md)
+- [Architecture](docs/architecture.md)
+- [Protocol](docs/protocol.md)
+- [Cryptography](docs/crypto.md)
+- [Wallet](docs/wallet.md), [Mining](docs/mining.md), [Running a node](docs/running-a-node.md)
+- [RPC](docs/rpc.md), [Limits](docs/limits.md)
+- [Security](docs/security.md), [Roadmap](docs/roadmap.md)
 
-Version **4** adds destination-bound legacy ownership and explicit native block
-limits (4 inputs, 4 outputs, 4 kernels, 64 KiB structural body), retaining the
-version3 context-bound fee commitments and atomic storage schema. Old unfenced databases and earlier
-protocol histories are rejected. Create a
-new disposable local data directory; there is no trusted automatic upgrade.
-No reward, allocation, fee destination or GVT value constant was changed.
+## Security
 
-The original snapshot fixture is preserved, but genesis generation rejects its
-malformed account records. A valid binary parser does not authenticate historical
-supply. There is no approved mainnet genesis or authenticated migration manifest.
-The `GVTBaseValue` constant is **700 NOSO**, despite old documents claiming 70;
-that discrepancy requires an explicit protocol decision, not a silent patch.
+Report vulnerabilities privately; see [SECURITY.md](SECURITY.md). The internal
+review is summarized in [audit/SECURITY_FINDINGS.md](audit/SECURITY_FINDINGS.md).
 
-## Layout
+## Contributing
 
-`v2/` contains chain, crypto, genesis, wallet, miner, mempool, PoW, types, P2P and
-RPC. `internal/` and `cmd/nosod`, `cmd/nosocli` contain legacy archive tooling;
-it is not a complete historical consensus verifier. `scripts/` builds local
-artifacts. The previously documented explorer executable is absent.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup and private disclosure.
-MIT licensed. Repository visibility and archive settings are unchanged.
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,44 @@
+site_name: NosoX
+site_description: Documentation for the NosoX node, wallet and protocol
+site_url: https://pasichdev.github.io/noso-go/
+repo_url: https://github.com/pasichDev/noso-go
+repo_name: pasichDev/noso-go
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Design:
+      - Architecture: architecture.md
+      - Protocol: protocol.md
+      - Cryptography: crypto.md
+  - Use:
+      - Wallet: wallet.md
+      - Mining: mining.md
+      - Running a node: running-a-node.md
+      - RPC: rpc.md
+      - Reproducible builds: reproducible-builds.md
+  - Project:
+      - Limits: limits.md
+      - Security: security.md
+      - Roadmap: roadmap.md

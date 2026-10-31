@@ -1,11 +1,15 @@
 package wallet
 
 import (
-	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 func TestLoadRejectsMalformedEnvelopeWithoutPanic(t *testing.T) {
@@ -27,31 +31,6 @@ func TestLoadRejectsMalformedEnvelopeWithoutPanic(t *testing.T) {
 		}()
 	}
 }
-func TestSlateRejectsMissingAndMalformedPartials(t *testing.T) {
-	s := NewOfferSlate(1, 0, 0, "")
-	if s.VerifyPartials() {
-		t.Error("empty signatures accepted")
-	}
-	s.PartSigs = []PartialSig{{By: RoleSender, Pub: []byte{1}, Sig: make([]byte, 64)}}
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("malformed public key panicked: %v", r)
-		}
-	}()
-	if s.VerifyPartials() {
-		t.Error("malformed partial accepted")
-	}
-}
-func TestSlateSignatureBindsBodyFields(t *testing.T) {
-	s := NewOfferSlate(1, 0, 0, "")
-	_, priv, _ := ed25519.GenerateKey(nil)
-	s.SignPartial(RoleSender, priv)
-	s.Memo = "changed"
-	if s.VerifyPartials() {
-		t.Error("memo mutation retained signature validity")
-	}
-}
-
 func TestSaveIgnoresAttackerStaticTempAndProtectsMode(t *testing.T) {
 	w, err := NewRandom()
 	if err != nil {
@@ -64,15 +43,26 @@ func TestSaveIgnoresAttackerStaticTempAndProtectsMode(t *testing.T) {
 	if err := os.WriteFile(victim, []byte("untouched"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// A symlink at the old static temp name AND one at the wallet path itself,
+	// both pointing at a file the attacker wants overwritten.
 	if err := os.Symlink(victim, path+".tmp"); err != nil {
 		t.Skip(err)
 	}
-	if err := w.Save(path, "password"); err != nil {
+	if err := os.Symlink(victim, path); err != nil {
+		t.Skip(err)
+	}
+	if err := w.Save(path, testPass); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(victim)
 	if string(b) != "untouched" {
-		t.Fatal("static temp followed symlink")
+		t.Fatal("a planted symlink was followed")
+	}
+	if fi, err := os.Lstat(path); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("the wallet path is still a symlink: %v", err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".wallet-*")); len(left) != 0 {
+		t.Fatalf("temporary files left behind: %v", left)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -81,7 +71,7 @@ func TestSaveIgnoresAttackerStaticTempAndProtectsMode(t *testing.T) {
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("mode=%o", info.Mode().Perm())
 	}
-	loaded, err := Load(path, "password")
+	loaded, err := Load(path, testPass)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,44 +109,6 @@ func TestCoinbaseFailedPersistenceDoesNotPublishRecord(t *testing.T) {
 		t.Fatal("failed allocation retained in memory")
 	}
 }
-func TestSlateRejectsOverflowAndUnsupportedVersion(t *testing.T) {
-	s := NewOfferSlate(1, ^uint64(0), 0, "")
-	if err := s.CheckBalance(); err == nil {
-		t.Fatal("overflow fee accepted")
-	}
-	s.Fee = 0
-	s.Version = 2
-	encoded, err := s.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Decode(encoded); err == nil {
-		t.Fatal("unsupported version accepted")
-	}
-	s.Version = 1
-	s.Stage = StageOffer
-	encoded, err = s.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := base58Decode(encoded[len("SLATEPACK1."):])
-	raw[0] = byte(StageFinal)
-	if _, err := Decode("SLATEPACK1." + base58Encode(raw)); err == nil {
-		t.Fatal("header/body stage mismatch accepted")
-	}
-}
-
-func TestSlateSignatureBindsSignerRole(t *testing.T) {
-	s := NewOfferSlate(1, 0, 0, "")
-	_, priv, _ := ed25519.GenerateKey(nil)
-	if err := s.SignPartial(RoleSender, priv); err != nil {
-		t.Fatal(err)
-	}
-	s.PartSigs[0].By = RoleReceiver
-	if s.VerifyPartials() {
-		t.Fatal("signer role could be relabeled")
-	}
-}
 func TestCoinbaseStoreRejectsCorruptRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "coins")
 	body, _ := json.Marshal([]CoinbaseRecord{{Amount: 1}})
@@ -165,5 +117,68 @@ func TestCoinbaseStoreRejectsCorruptRecord(t *testing.T) {
 	}
 	if _, err := OpenCoinbaseStore(path); err == nil {
 		t.Fatal("corrupt coinbase record accepted")
+	}
+}
+
+// Keystores written before an old key section was dropped carry an extra
+// JSON key. It must be ignored on load, not rejected, and the master
+// key must be intact; re-saving must not write the section back.
+func TestLoadIgnoresUnknownKeystoreSection(t *testing.T) {
+	w, err := NewRandom()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	plain, err := json.Marshal(map[string]any{
+		"master_seed": base64.StdEncoding.EncodeToString(w.Master.Seed()),
+		"legacy": map[string]any{"Nobsolete": map[string]string{
+			"address": "Nobsolete", "pub": "bogus", "priv": "bogus",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		t.Fatal(err)
+	}
+	key := argon2.IDKey([]byte(testPass), salt, 1, 64*1024, 1, 32)
+	aead, err := chacha20poly1305.NewX(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	enc := Encrypted{
+		Version:    1,
+		Salt:       base64.StdEncoding.EncodeToString(salt),
+		Nonce:      base64.StdEncoding.EncodeToString(nonce),
+		Ciphertext: base64.StdEncoding.EncodeToString(aead.Seal(nil, nonce, plain, nil)),
+	}
+	body, _ := json.Marshal(enc)
+	path := filepath.Join(t.TempDir(), "old-wallet.json")
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path, testPass)
+	if err != nil {
+		t.Fatalf("keystore with obsolete legacy section rejected: %v", err)
+	}
+	defer loaded.Close()
+	if !EqualSeed(w, loaded) {
+		t.Fatal("master seed differs after load")
+	}
+	if err := loaded.Save(path, testPass); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path, testPass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if !EqualSeed(w, again) {
+		t.Fatal("master seed differs after re-save")
 	}
 }

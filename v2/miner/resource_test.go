@@ -16,7 +16,7 @@ import (
 func TestCandidateReservesMandatoryV4Outputs(t *testing.T) {
 	cfg := genesis.Default()
 	cfg.InitialDifficulty = 1
-	g, _, _, err := genesis.Build(cfg)
+	g, err := genesis.Build(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,6 +34,11 @@ func TestCandidateReservesMandatoryV4Outputs(t *testing.T) {
 		candidate, err := miner.makeCandidate()
 		if err != nil {
 			t.Fatal(err)
+		}
+		if candidate.reward != nil {
+			if err = keys.Persist(*candidate.reward); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if err = ch.AddBlock(candidate.block); err != nil {
 			t.Fatal(err)
@@ -58,8 +63,7 @@ func TestCandidateReservesMandatoryV4Outputs(t *testing.T) {
 			t.Fatal(err)
 		}
 		kernel := types.Kernel{Fee: 100, Excess: excess}
-		id := types.KernelID(&kernel)
-		kernel.ExcessSig, err = c.SchnorrSign(scalar, id[:])
+		kernel.ExcessSig, err = c.SchnorrSign(scalar, types.KernelSigningMessage(g.Header.NetworkMagic, &kernel))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,8 +76,10 @@ func TestCandidateReservesMandatoryV4Outputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidate.kernelsByTx) != 1 || len(candidate.block.Outputs) != types.MaxBlockOutputs {
-		t.Fatal("failed to reserve coinbase and fee output capacity")
+	if len(candidate.kernelsByTx) != 1 || len(candidate.block.Outputs) != 3 {
+		// Two 2-output transactions plus the one reserved coinbase would be five
+		// outputs; exactly one transaction and the coinbase fit.
+		t.Fatal("failed to reserve coinbase output capacity")
 	}
 	if err = ch.AddBlock(candidate.block); err != nil {
 		t.Fatalf("capacity-selected candidate invalid: %v", err)

@@ -13,10 +13,10 @@ func TestWalletCloseZeroizesMasterKey(t *testing.T) {
 	// Persist and reload to exercise the locked decryption path.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wallet.json")
-	if err := w.Save(path, "secret"); err != nil {
+	if err := w.Save(path, testPass); err != nil {
 		t.Fatal(err)
 	}
-	w2, err := Load(path, "secret")
+	w2, err := Load(path, testPass)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,6 +39,33 @@ testdata/fuzz/
 # Live preview servers
 /tmp/nosox-launch/
 
-# dev fund private key — never commit
-dev-wallet/
+# seed files — never commit
 *.seed
+
+# Documentation build output
+site/
+
+# Secrets and node state. A data directory inside a checkout must never be
+# committed: coinbases.json holds reward spending keys in plaintext.
+coinbases.json
+*.outputs
+*.outputs.lock
+*.wallet
+*.keystore
+wallet*.json
+.rpc-cookie
+*.pem
+*.key
+*.minisign
+*.minisign.key
+/data/
+/nosox-data*/
+/nosoxd
+/nosox-cli
+/cmd/nosoxd/nosoxd
+/cmd/nosox-cli/nosox-cli
+*.dll
+*.dylib
+*.so
+.ci-logs/
+coverage.out

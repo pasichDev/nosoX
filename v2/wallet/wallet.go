@@ -2,59 +2,47 @@
 //
 // Keystore: JSON file encrypted with Argon2id-derived key + XChaCha20-Poly1305.
 // A wallet holds:
-//   - An Ed25519 master key (new-era identity + signing).
-//   - Zero or more secp256k1 legacy keys imported from v1 wallet.pkw
-//     for claiming legacy outputs.
+//   - An Ed25519 master key (identity + signing).
 package wallet
 
 import (
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/btcsuite/btcd/btcec/v2"
 	"io"
 	"os"
 	"path/filepath"
 
-	v1crypto "github.com/pasichDev/noso-go/internal/crypto"
-	v1types "github.com/pasichDev/noso-go/internal/types"
-
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // Wallet is the in-memory key bundle.
 type Wallet struct {
-	Master ed25519.PrivateKey        `json:"-"`
-	Legacy map[string]LegacyKeyEntry `json:"-"` // by legacy address
-	Plain  plainView                 `json:"-"` // export view used in serialization
-}
-
-// LegacyKeyEntry holds the (legacy_address, public_key_base64, private_key_base64)
-// triple imported from a v1 wallet.pkw file.
-type LegacyKeyEntry struct {
-	Address    string `json:"address"`
-	PublicKey  string `json:"pub"`
-	PrivateKey string `json:"priv"`
+	Master ed25519.PrivateKey `json:"-"`
+	Plain  plainView          `json:"-"` // export view used in serialization
+	// LockErr is the mlock failure for Master, if any (page pinning is best effort).
+	LockErr error `json:"-"`
+	// Legacy is set by Load when the file was a version 1 keystore (weak KDF,
+	// no authenticated parameters). Call Upgrade to rewrite it as version 2.
+	Legacy bool `json:"-"`
 }
 
 // plainView is what gets encrypted to disk.
 type plainView struct {
-	MasterSeedB64 string                    `json:"master_seed"`
-	Legacy        map[string]LegacyKeyEntry `json:"legacy"`
+	MasterSeedB64 string `json:"master_seed"`
 }
 
-// Encrypted is the file format on disk.
+// Encrypted is the file format on disk (keystore and state share it).
 type Encrypted struct {
-	Version    int    `json:"version"`
-	Salt       string `json:"salt"`       // base64
-	Nonce      string `json:"nonce"`      // base64 (XChaCha 24 bytes)
-	Ciphertext string `json:"ciphertext"` // base64
+	Version    int        `json:"version"`
+	KDF        *KDFParams `json:"kdf,omitempty"` // version 2: Argon2id parameters
+	Salt       string     `json:"salt"`          // base64
+	Nonce      string     `json:"nonce"`         // base64 (XChaCha 24 bytes)
+	Ciphertext string     `json:"ciphertext"`    // base64
 }
 
 // NewRandom mints a fresh Ed25519 master key.
@@ -63,7 +51,7 @@ func NewRandom() (*Wallet, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Wallet{Master: priv, Legacy: map[string]LegacyKeyEntry{}}, nil
+	return &Wallet{Master: priv}, nil
 }
 
 // MasterPublic returns the Ed25519 public key (32 bytes).
@@ -74,99 +62,134 @@ func (w *Wallet) MasterPublic() ed25519.PublicKey {
 	return w.Master.Public().(ed25519.PublicKey)
 }
 
-// ImportLegacyFile reads a v1 wallet.pkw and adds every record as a
-// claim-able legacy key. Returns how many entries were added.
-func (w *Wallet) ImportLegacyFile(path string) (int, error) {
-	data, err := readBoundedSecret(path)
-	if err != nil {
-		return 0, err
-	}
-	defer Zeroize(data)
-	if len(data)%v1types.WalletRecordSize != 0 || len(data)/v1types.WalletRecordSize > 10000 {
-		return 0, errors.New("wallet: invalid legacy record size/count")
-	}
-	recs := make([]v1types.WalletData, len(data)/v1types.WalletRecordSize)
-	for i := range recs {
-		if !recs[i].Unmarshal(data[i*v1types.WalletRecordSize : (i+1)*v1types.WalletRecordSize]) {
-			return 0, errors.New("wallet: invalid legacy record")
-		}
-	}
-	if w.Legacy == nil {
-		w.Legacy = map[string]LegacyKeyEntry{}
-	}
-	n := 0
-	for _, r := range recs {
-		// Validate that the address matches the public key (round-trip
-		// check — catches corrupt wallets).
-		addr, err := v1crypto.AddressFromPublicKey(r.PublicKey, v1crypto.AddressTypeRegular)
-		if err != nil || addr != r.Hash || validateLegacy(r.Hash, LegacyKeyEntry{r.Hash, r.PublicKey, r.PrivateKey}) != nil {
-			continue
-		}
-		if _, exists := w.Legacy[r.Hash]; !exists && len(w.Legacy) >= 10000 {
-			return n, errors.New("wallet: legacy key limit")
-		}
-		w.Legacy[r.Hash] = LegacyKeyEntry{
-			Address:    r.Hash,
-			PublicKey:  r.PublicKey,
-			PrivateKey: r.PrivateKey,
-		}
-		n++
-	}
-	return n, nil
-}
-
-// Save writes the wallet to disk, encrypted with a passphrase.
-func (w *Wallet) Save(path, passphrase string) error {
-	if !validMaster(w) {
-		return errors.New("wallet: invalid master key")
-	}
-	if err := validateLegacyMap(w.Legacy); err != nil {
-		return err
-	}
-	if passphrase == "" {
-		return errors.New("wallet: empty passphrase not allowed")
-	}
-	view := plainView{
-		MasterSeedB64: base64.StdEncoding.EncodeToString(w.Master.Seed()),
-		Legacy:        w.Legacy,
-	}
+// seal encrypts the wallet as a version 2 envelope.
+func (w *Wallet) seal(passphrase string) ([]byte, error) {
+	view := plainView{MasterSeedB64: base64.StdEncoding.EncodeToString(w.Master.Seed())}
 	plain, err := json.Marshal(view)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer Zeroize(plain)
-	if len(plain) > maxWalletBytes/2 {
-		return errors.New("wallet: too large")
-	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
-		return err
+		return nil, err
 	}
-	key := argon2.IDKey([]byte(passphrase), salt, 1, 64*1024, 1, 32)
+	kdf := kdfDefault
+	key := deriveKey(passphrase, salt, kdf)
 	defer Zeroize(key)
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	nonce := make([]byte, aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return err
+		return nil, err
 	}
-	ct := aead.Seal(nil, nonce, plain, nil)
+	ct := aead.Seal(nil, nonce, plain, envelopeAAD(labelKeystore, envelopeV2, salt, kdf))
 	enc := Encrypted{
-		Version:    1,
+		Version:    envelopeV2,
+		KDF:        &kdf,
 		Salt:       base64.StdEncoding.EncodeToString(salt),
 		Nonce:      base64.StdEncoding.EncodeToString(nonce),
 		Ciphertext: base64.StdEncoding.EncodeToString(ct),
 	}
-	body, err := json.MarshalIndent(&enc, "", "  ")
+	return json.MarshalIndent(&enc, "", "  ")
+}
+
+// Create writes a NEW wallet file. It refuses to touch an existing wallet or
+// an existing state file for that path (an overwrite would orphan the old
+// master key and everything the state file holds), applies the passphrase
+// policy, and never replaces anything: the file is published with a hard link,
+// which fails if the name is taken.
+func (w *Wallet) Create(path, passphrase string) error {
+	if !validMaster(w) {
+		return errors.New("wallet: invalid master key")
+	}
+	if err := ValidatePassphrase(passphrase); err != nil {
+		return err
+	}
+	for _, p := range []string{path, StatePath(path)} {
+		if _, err := os.Lstat(p); err == nil {
+			return fmt.Errorf("wallet: %s already exists; choose a new path (an existing wallet is never overwritten)", p)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	body, err := w.seal(passphrase)
+	if err != nil {
+		return err
+	}
+	return atomicSecretCreate(path, body)
+}
+
+// Save (over)writes the wallet file, encrypted with a passphrase. It is the
+// path for deliberate replacement; new wallets use Create. It is NOT a
+// passphrase change: it re-keys only the keystore, and the output state
+// (<wallet>.outputs) stays keyed with the old passphrase and would no longer
+// open. There is no re-key command.
+func (w *Wallet) Save(path, passphrase string) error {
+	if !validMaster(w) {
+		return errors.New("wallet: invalid master key")
+	}
+	if err := ValidatePassphrase(passphrase); err != nil {
+		return err
+	}
+	body, err := w.seal(passphrase)
 	if err != nil {
 		return err
 	}
 	return atomicSecretWrite(path, body)
 }
 
-// Load opens an encrypted wallet file.
+// Upgrade rewrites a version 1 keystore as version 2 with the same passphrase
+// (the passphrase policy is not applied: the file was already encrypted with it).
+func (w *Wallet) Upgrade(path, passphrase string) error {
+	if !validMaster(w) {
+		return errors.New("wallet: invalid master key")
+	}
+	if passphrase == "" {
+		return errors.New("wallet: empty passphrase not allowed")
+	}
+	body, err := w.seal(passphrase)
+	if err != nil {
+		return err
+	}
+	// The old file may hold more than the master seed (imported legacy keys that
+	// this format does not carry). Keep it, byte for byte, before replacing it.
+	if _, err := BackupBeforeUpgrade(path); err != nil {
+		return fmt.Errorf("wallet: not upgrading, the old keystore could not be backed up: %w", err)
+	}
+	if err := atomicSecretWrite(path, body); err != nil {
+		return err
+	}
+	w.Legacy = false
+	return nil
+}
+
+// UpgradeBackupSuffix names the copy of a version 1 keystore kept by Upgrade.
+const UpgradeBackupSuffix = ".v1.bak"
+
+// BackupBeforeUpgrade copies the keystore at path to path+UpgradeBackupSuffix
+// (mode 0600, fsynced, never overwriting an earlier backup) and returns the
+// backup path. The copy keeps the weak version 1 encryption.
+func BackupBeforeUpgrade(path string) (string, error) {
+	bak := path + UpgradeBackupSuffix
+	if _, err := os.Lstat(bak); err == nil {
+		return bak, nil // an earlier backup is never replaced
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	body, err := readBoundedSecret(path)
+	if err != nil {
+		return "", err
+	}
+	defer Zeroize(body)
+	return bak, atomicSecretCreate(bak, body)
+}
+
+// Load opens an encrypted wallet file. Version 1 files are accepted (and
+// flagged Legacy) so an existing wallet can be migrated; anything else is
+// rejected.
 func Load(path, passphrase string) (*Wallet, error) {
 	body, err := readBoundedSecret(path)
 	if err != nil {
@@ -176,12 +199,27 @@ func Load(path, passphrase string) (*Wallet, error) {
 	if err := json.Unmarshal(body, &enc); err != nil {
 		return nil, fmt.Errorf("wallet: parse %s: %w", path, err)
 	}
-	if enc.Version != 1 {
-		return nil, errors.New("wallet: unsupported version")
-	}
+	var kdf KDFParams
+	var aad []byte
+	legacy := false
 	salt, err := base64.StdEncoding.Strict().DecodeString(enc.Salt)
 	if err != nil || len(salt) != 16 {
 		return nil, errors.New("wallet: invalid salt")
+	}
+	switch enc.Version {
+	case envelopeV1:
+		kdf, legacy = legacyKDF, true
+	case envelopeV2:
+		if enc.KDF == nil {
+			return nil, errors.New("wallet: missing key derivation parameters")
+		}
+		kdf = *enc.KDF
+		if err := kdf.validate(); err != nil {
+			return nil, err
+		}
+		aad = envelopeAAD(labelKeystore, envelopeV2, salt, kdf)
+	default:
+		return nil, errors.New("wallet: unsupported version")
 	}
 	nonce, err := base64.StdEncoding.Strict().DecodeString(enc.Nonce)
 	if err != nil || len(nonce) != chacha20poly1305.NonceSizeX {
@@ -191,22 +229,19 @@ func Load(path, passphrase string) (*Wallet, error) {
 	if err != nil || len(ct) < chacha20poly1305.Overhead {
 		return nil, errors.New("wallet: invalid ciphertext")
 	}
-	key := argon2.IDKey([]byte(passphrase), salt, 1, 64*1024, 1, 32)
+	key := deriveKey(passphrase, salt, kdf)
 	defer Zeroize(key)
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
 		return nil, err
 	}
-	plain, err := aead.Open(nil, nonce, ct, nil)
+	plain, err := aead.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return nil, fmt.Errorf("wallet: decrypt: %w (bad passphrase?)", err)
 	}
 	defer Zeroize(plain)
 	var view plainView
 	if err := json.Unmarshal(plain, &view); err != nil {
-		return nil, err
-	}
-	if err := validateLegacyMap(view.Legacy); err != nil {
 		return nil, err
 	}
 	seed, err := base64.StdEncoding.Strict().DecodeString(view.MasterSeedB64)
@@ -221,42 +256,13 @@ func Load(path, passphrase string) (*Wallet, error) {
 	// kernel cannot swap the secret to disk. We also zero the plain
 	// decrypted JSON buffer and the seed buffer immediately after use.
 	priv := ed25519.NewKeyFromSeed(seed)
-	if err := LockBytes(priv); err != nil {
-		// Best-effort: log via stderr-style return so caller can decide.
-		// The wallet still works, just without page-pinning.
-	}
+	// Best effort: the wallet works without page pinning, but the caller can
+	// inspect LockErr and warn.
+	lockErr := LockBytes(priv)
 	Zeroize(seed)
 	Zeroize(plain)
 
-	w := &Wallet{
-		Master: priv,
-		Legacy: view.Legacy,
-	}
-	if w.Legacy == nil {
-		w.Legacy = map[string]LegacyKeyEntry{}
-	}
-	return w, nil
-}
-
-// ClaimMessage preserves the historical prototype message for compatibility.
-// It is not a version4 authorization; use BuildLegacyClaimV4 with explicit
-// network, genesis and destination context.
-func (w *Wallet) ClaimMessage(addr string, commit [33]byte, height uint64) []byte {
-	return []byte(fmt.Sprintf("NOSOX-LEGACY-SPEND %s %x %d", addr, commit[:], height))
-}
-
-// SignLegacyClaim preserves historical SHA1 signing for compatibility tools.
-// Its result is not accepted by version4 consensus. BuildLegacyClaimV4 uses
-// the separately domain-separated SHA256 ownership procedure.
-func (w *Wallet) SignLegacyClaim(addr string, msg []byte) (string, error) {
-	entry, ok := w.Legacy[addr]
-	if !ok {
-		return "", fmt.Errorf("wallet: no legacy key for %s", addr)
-	}
-	if err := validateLegacy(addr, entry); err != nil {
-		return "", err
-	}
-	return v1crypto.SignString(msg, entry.PrivateKey)
+	return &Wallet{Master: priv, LockErr: lockErr, Legacy: legacy}, nil
 }
 
 // EqualSeed is a constant-time equality check on Ed25519 seeds (used in tests).
@@ -264,45 +270,12 @@ func EqualSeed(a, b *Wallet) bool {
 	return a != nil && b != nil && len(a.Master) == ed25519.PrivateKeySize && len(b.Master) == ed25519.PrivateKeySize && subtle.ConstantTimeCompare(a.Master.Seed(), b.Master.Seed()) == 1
 }
 
-const maxWalletBytes = 8 << 20
+const maxWalletBytes int64 = 8 << 20
 
-func validateLegacyMap(entries map[string]LegacyKeyEntry) error {
-	if len(entries) > 10000 {
-		return errors.New("wallet: too many legacy keys")
-	}
-	for addr, entry := range entries {
-		if err := validateLegacy(addr, entry); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func validateLegacy(addr string, entry LegacyKeyEntry) error {
-	raw, err := base64.StdEncoding.Strict().DecodeString(entry.PrivateKey)
-	if err != nil || len(raw) != 32 {
-		return errors.New("wallet: invalid legacy secret")
-	}
-	defer Zeroize(raw)
-	var scalar btcec.ModNScalar
-	if scalar.SetByteSlice(raw) || scalar.IsZero() {
-		return errors.New("wallet: invalid legacy scalar")
-	}
-	pub, err := v1crypto.ParsePublicKey(entry.PublicKey)
-	if err != nil {
-		return err
-	}
-	x, y := btcec.S256().ScalarBaseMult(raw)
-	if x.Cmp(pub.X) != 0 || y.Cmp(pub.Y) != 0 {
-		return errors.New("wallet: mismatched legacy keypair")
-	}
-	canonical := base64.StdEncoding.EncodeToString(elliptic.Marshal(btcec.S256(), x, y))
-	derived, err := v1crypto.AddressFromPublicKey(canonical, v1crypto.AddressTypeRegular)
-	if err != nil || addr != entry.Address || derived != addr {
-		return errors.New("wallet: legacy address mismatch")
-	}
-	return nil
-}
-func readBoundedSecret(path string) ([]byte, error) {
+func readBoundedSecret(path string) ([]byte, error) { return readBounded(path, maxWalletBytes) }
+
+// readBounded reads a regular file of at most limit bytes.
+func readBounded(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -312,49 +285,80 @@ func readBoundedSecret(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxWalletBytes {
+	if !info.Mode().IsRegular() || info.Size() > limit {
 		return nil, errors.New("wallet: file too large or not regular")
 	}
-	body, err := io.ReadAll(io.LimitReader(f, maxWalletBytes+1))
+	body, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > maxWalletBytes {
+	if int64(len(body)) > limit {
 		return nil, errors.New("wallet: file too large")
 	}
 	return body, nil
 }
 
-// atomicSecretWrite uses an exclusive random temporary in the destination directory.
-// Sync errors are returned; after rename a directory sync error is an uncertain durability result.
-func atomicSecretWrite(path string, body []byte) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".wallet-*")
+// writeTemp writes body to an exclusive random temporary (0600 on Unix) in the
+// destination directory and syncs it.
+func writeTemp(path string, body []byte) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), ".wallet-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
-	if _, err = f.Write(body); err != nil {
-		f.Close()
-		return err
+	if _, err = f.Write(body); err == nil {
+		err = f.Sync()
 	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	if err = f.Close(); err != nil {
-		return err
+	if err != nil {
+		os.Remove(tmp)
+		return "", err
 	}
-	if err = os.Rename(tmp, path); err != nil {
-		return err
-	}
-	d, err := os.Open(dir)
+	return tmp, nil
+}
+
+// ErrWrittenUnconfirmed means the new file is in place but a later durability
+// step failed: the data is NOT lost and not rolled back, only its survival of a
+// crash is unconfirmed. Callers must not report such a write as "not written".
+var ErrWrittenUnconfirmed = errors.New("wallet: file written but its durability could not be confirmed")
+
+// atomicSecretWrite replaces path with body: exclusive temporary + fsync +
+// rename + directory sync (Windows: write-through rename). Errors before the
+// rename mean nothing changed; an error after it wraps ErrWrittenUnconfirmed.
+func atomicSecretWrite(path string, body []byte) error {
+	tmp, err := writeTemp(path, body)
 	if err != nil {
 		return err
 	}
-	defer d.Close()
-	return d.Sync()
+	if err := replaceFile(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := syncDirFn(path); err != nil {
+		return fmt.Errorf("%w: %v", ErrWrittenUnconfirmed, err)
+	}
+	return nil
+}
+
+// atomicSecretCreate publishes body at path only if path does not exist.
+func atomicSecretCreate(path string, body []byte) error {
+	tmp, err := writeTemp(path, body)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	if err := os.Link(tmp, path); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("wallet: %s already exists", path)
+		}
+		return err
+	}
+	if err := syncDirFn(path); err != nil {
+		return fmt.Errorf("%w: %v", ErrWrittenUnconfirmed, err)
+	}
+	return nil
 }
 
 func validMaster(w *Wallet) bool {

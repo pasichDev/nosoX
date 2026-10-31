@@ -9,13 +9,14 @@ func TestCompactFilterPositive(t *testing.T) {
 	b := &Block{
 		Header: BlockHeader{Height: 42},
 		Outputs: []Output{
-			{Features: OutputFeaturesLegacy, Commit: [33]byte{0, 1, 2, 3}, LegacyAddress: "Nfoo"},
+			{Features: OutputFeaturesCoinbase, Commit: [33]byte{0, 1, 2, 3}},
 			{Features: OutputFeaturesPlain, Commit: [33]byte{4, 5, 6, 7}},
 		},
 	}
 	f := BuildFilter(b)
-	if !f.MatchBytes([]byte("Nfoo")) {
-		t.Error("filter missed legacy address it contains")
+	first := [33]byte{0, 1, 2, 3}
+	if !f.MatchBytes(first[:]) {
+		t.Error("filter missed coinbase commit it contains")
 	}
 	commit := [33]byte{4, 5, 6, 7}
 	if !f.MatchBytes(commit[:]) {

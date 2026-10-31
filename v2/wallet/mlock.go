@@ -38,9 +38,7 @@ func Zeroize(b []byte) {
 	}
 }
 
-// Close zeroizes and unlocks the mutable master key and clears legacy references.
-// Legacy secrets are immutable Go strings: copies cannot be reliably erased.
-// Idempotent.
+// Close zeroizes and unlocks the mutable master key. Idempotent.
 func (w *Wallet) Close() {
 	if w == nil {
 		return
@@ -49,9 +47,6 @@ func (w *Wallet) Close() {
 		Zeroize(w.Master)
 		UnlockBytes(w.Master)
 		w.Master = nil
-	}
-	for k := range w.Legacy {
-		delete(w.Legacy, k)
 	}
 	w.Plain = plainView{}
 }

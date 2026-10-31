@@ -41,7 +41,7 @@ def enc(a):
     return bytes([2 + a[1] % 2]) + a[0].to_bytes(32, 'big')
 
 
-x = int.from_bytes(hashlib.sha256(b'Noso v2 Pedersen H point').digest(), 'big') % P
+x = int.from_bytes(hashlib.sha256(b'NosoX/pedersen-h/v5\x00').digest(), 'big') % P
 while True:
     rhs = (x*x*x+7) % P
     y = pow(rhs, (P+1)//4, P)
@@ -52,7 +52,7 @@ while True:
 msg = b'NosoX independent arithmetic vector'
 r = enc(mul(2, G))
 pub = enc(G)
-e = int.from_bytes(hashlib.sha256(b'Noso-v2-Schnorr'+r+pub+
+e = int.from_bytes(hashlib.sha256(b'NosoX/schnorr/v5\x00'+r+pub+
                                  len(msg).to_bytes(4, 'big')+msg).digest(), 'big') % N
 signature = r + ((2+e) % N).to_bytes(32, 'big')
 print(json.dumps({'H': enc(H).hex(), 'C_42_1': enc(add(mul(42,H),G)).hex(),

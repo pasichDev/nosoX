@@ -1,126 +1,120 @@
-# Consensus invariants (written before validation changes)
+# Consensus invariants
 
-Baseline: 6179eb56d53768a19950f07e9c806fd384572c5d, clean tree, main.
-These are requirements, not assertions about the implementation.
+These are the properties the validation code is required to uphold, with the
+place each one is enforced. They are requirements and evidence pointers, not a
+proof of security. Cryptographic soundness is a separate, open question (see
+[RELEASE_READINESS.md](RELEASE_READINESS.md)).
 
-1. Issued supply at h equals the explicitly trusted genesis allocation plus
-   sum(BlockReward(i), i=1..h). Fees transfer existing value to the configured
-   destination; they are neither subsidy nor burn. Issued supply includes locked
-   and unclaimed outputs. Circulating supply is not established by this audit.
-2. Exactly the authorized subsidy is created per non-genesis block; no other
-   feature flag may mint value. Coinbase output/kernel count, signature, amount,
-   fee and maturity must be checked, including after issuance ends.
-3. Each input matches exactly one existing UTXO, is unique in the block, matches
-   stored features and ownership metadata, and satisfies maturity/lock rules.
-   Legacy public blindings are not ownership: claims require a reviewed proof
-   tying a supplied historical key to its address and network-bound message.
-   Until that procedure exists, legacy spends must fail closed.
-4. For native transfers: sum(plain outputs) - sum(inputs) + fees*H equals
-   sum(transaction excesses); each excess has a valid Schnorr signature and each
-   plain output has a cryptographically verified nonnegative range proof.
-   Coinbase and transparent fee outputs are separately constrained. Offsets are
-   unsupported and must be zero until their semantics are specified and tested.
-5. The header binds every input, output, proof, kernel signature and ordered
-   body field. Encodings are domain separated and length delimited. Validators
-   independently recompute roots. Unknown versions/features are rejected.
-6. Failure leaves tip, height/hash indices, UTXOs (all metadata), and persistent
-   state unchanged. Reorgs are atomic across the whole suffix and only choose
-   strictly greater accumulated valid work, never height alone.
-7. Same trusted genesis and history imply byte-identical state on all backends.
-   Stored/caller-owned slices must not mutate accepted history.
-8. All untrusted decoding and validation are explicitly bounded; cheap
-   structural rejection precedes expensive curve and Argon2 operations.
-9. Expected difficulty uses exact overflow-safe integer arithmetic; timestamps
-   cannot cause overflow or nondeterministic state acceptance.
+Rules and encodings are specified in the
+[protocol documentation](https://github.com/pasichDev/noso-go/blob/main/docs/protocol.md).
 
-Implementation/test references and unresolved gaps will be appended after review.
+## Invariants
 
-## Implementation evidence and limits after hardening
+1. **Supply.** Issued supply at height `h` equals the sum of
+   `BlockReward(i)` for `i = 1..h`, and equally the sum of all unspent
+   values: **Σ unspent = Σ rewards**. Genesis allocates nothing. A spend
+   destroys its fee and the block's coinbase re-creates it for the miner, so
+   fees are moved, never minted or burned. There is no founder allocation and
+   no protocol fee. Tests: `TestSupplyEqualsRewardsWithFeesAndReorg` (both
+   stores, with a reorg).
+2. **Coinbase.** The coinbase value is `BlockReward(height) + F` (`F` = total
+   fee of the plain kernels, from the one helper `PlainKernelFees` that the
+   balance equation also uses), overflow-checked in int64 and enforced by the kernel signature
+   (`VerifyCoinbase` is called with exactly that amount), so a miner can claim
+   neither more nor less. A block with `reward + F > 0` has exactly one
+   coinbase output and one coinbase kernel, also after emission ends at height
+   2,310,000, where fees are the only payment; a block with `reward + F == 0`
+   has neither. The coinbase output must commit to the same point as the
+   coinbase kernel's excess. The coinbase kernel has fee 0 and lock height
+   `height + 60`; a coinbase kernel fee is also never counted in `F`, so the
+   fee-0 rule is defense in depth rather than the only guard. Output feature 2
+   (once a dev-fund draft) is unassigned and rejected. Tests:
+   `TestCoinbaseMustClaimExactlyRewardPlusFees`,
+   `TestPostEmissionCoinbaseIsFeesOnly`, `TestOutputFeatureTwoIsRejected`,
+   `TestCandidateCoinbasePaysRewardPlusFees`, and one test per guard (each was
+   shown to fail when its guard is removed; see the table below).
+3. **Inputs.** Each input matches exactly one unspent output, appears once in
+   the block, and carries the stored feature flag. A coinbase output cannot be
+   spent until 60 blocks after its creation, exactly (a spend one block early
+   is refused, at 60 accepted), also when the coinbase carries fees.
+4. **Native transfers.** `sum(plain outputs) - sum(inputs) + fees*H` equals the
+   sum of ordinary kernel excesses. Each ordinary kernel carries a valid
+   Schnorr signature under its excess. Each plain output carries a verified
+   range proof. The coinbase output is constrained separately (invariant 2). The
+   header offset field must be zero.
+5. **Binding.** The header commits to every input, output, proof, kernel and
+   kernel signature through two ordered roots. Encodings are domain separated
+   and length delimited. Validators recompute the roots. Unknown versions and
+   feature flags are rejected.
+6. **Atomicity.** A failed validation or storage error leaves the tip, indexes
+   and unspent set unchanged. A reorganization replaces a whole suffix or
+   nothing, and only when the incoming suffix has strictly greater accumulated
+   work.
+7. **Determinism.** The same genesis and the same history produce the same
+   state in both storage backends.
+8. **Bounded work.** Untrusted decoding and validation have explicit bounds.
+   Cheap structural checks run before curve and Argon2id operations.
+9. **Arithmetic.** Difficulty uses exact integer arithmetic with saturation.
+   Timestamps cannot overflow the validator.
+10. **Uniqueness.** An output commitment or kernel ID that ever appeared on the
+    active chain cannot appear again.
 
-The requirements above remain requirements, not a proof of security. Exact
-executed results and source manifests are in TEST_REPORT.md and
-VERIFICATION_SUMMARY.md. The current isolated tests cover:
+## Where each invariant is enforced
 
-| Property | Implementation | Executed regression evidence |
+| Invariant | Code | Representative tests |
 |---|---|---|
-| Scheduled subsidy / no unaccounted mint | chain.validateBody, wallet.VerifyCoinbase, types.BlockReward | BlockAuthorizationMutations, MissingCoinbaseRejected, SyntheticScheduleEdgesThroughAddBlock; types.IssuanceScheduleIndependentSum |
-| Input authorization / maturity / unique spend | chain.validateBody, crypto.SchnorrVerify | NativeAuthorizationMaturityAndUndo, LegacyClaimFailsClosed; direct StoreRejectsImpossibleDeltas |
-| Commitment conservation | chain.validateBalance, crypto.PedersenSumZero | NativeAuthorizationMaturityAndUndo including aggregate active UTXO commitments after consume/undo; balance negative tests |
-| Real range verification | crypto.VerifyRange/VerifyRangeBorromean | Fake v1 and mutated proofs through AddBlock, opening/encoding/OR checks; independent arithmetic vectors are partial evidence |
-| Complete body integrity | types.BlockRoots/TransactionID, chain.validateStructure | Full-body field mutations, stale-root versus invalid-proof rejection; canonical encoding fuzz results from earlier scope |
-| Deterministic canonical state / history uniqueness | both stores, outputSeen/kernelSeen, genesis pin/replay | BackendParityAndNestedSlices, ReopenPinsGenesis, native historical replay rejection |
-| Atomic failure / reorg | staged Chain.ReorgTo, Store.ReplaceChain, checkStoreDelta | ReorgRollbackAndStrictWork, ReorgCommitFailureUnchanged, BadgerAbruptExit, BadgerOversizeTransactionRollback (specific ErrTxnTooBig), StoreBadgerDecodeFailureUnchanged |
-| Valid accumulated work | chain.blockWork / expectedDifficulty, pow.LWMA3 | ShorterHeavierForkWins, maximum arithmetic and zero-difficulty negative tests |
-| Cheap bounded rejection | bodyBounds, ReorgTo preflight, bounded P2P/RPC codecs | ReorgRejectsMalformedBeforePrefixRead plus decoder/sync regression tests |
+| 1, 2 | `types.BlockReward`, `chain.validateBody`, `wallet.VerifyCoinbase` | `TestIssuanceScheduleIndependentSum` (`v2/types`), `TestSecurityBlockAuthorizationMutations` (`v2/chain`) |
+| 3 | `chain.validateBody` | `TestSecurityNativeAuthorizationMaturityAndUndo`, `TestFeeCarryingCoinbaseMaturityBoundary` |
+| 4 | `chain.validateBalance`, `crypto.PedersenSumZero`, `crypto.SchnorrVerify`, `crypto.VerifyRange` | `v2/chain/balance_test.go`, `v2/crypto` tests |
+| 5 | `types.BlockRoots`, `chain.validateStructure` | `v2/types/hardening_test.go` |
+| 6 | `Chain.ReorgTo`, `Store.ReplaceSuffix` | `TestSecurityShorterHeavierForkWins`, `v2/chain/badger_fence_test.go` |
+| 7 | both stores, genesis pin on reopen | `v2/chain/store_contract_test.go`, `TestSecurityReopenPinsGenesis` |
+| 8 | `chain.BodyResourceBytes`, `CheckReorgResourceBudget`, bounded P2P and RPC codecs | `v2/chain/resource_budget_test.go`, `v2/p2p/security_test.go` |
+| 9 | `pow.LWMA3`, `Chain.validate` | `v2/pow/hardening_test.go`, `TestSecurityFutureTimestampCannotFreezeChain` |
+| 10 | `Store.HasOutput`, `Store.HasKernel` | `v2/chain/hardening_test.go` |
 
-Names above omit the TestSecurity/Test prefix for readability where unambiguous.
-All complete names and durations are recorded in TEST_REPORT.md and verbose logs.
+### Guards on the coinbase and fee rules, and the test that fails without each
 
-Known exceptions to unqualified invariant claims:
+Each test below was run against a copy of the tree with the named guard
+disabled and failed there. "Helper test" means the guard lives in a shared
+function and the table-driven test of that function is what fails; the call
+sites are covered by the second test named.
 
-- Time admission assumes synchronized UTC clocks; validators straddling the2h
-  future bound may temporarily disagree. Identical deterministic encodings and
-  state transitions do not eliminate this environmental assumption.
-- Legacy authorization is mitigated by rejecting all claims, not implementing a
-  verified migration. Snapshot economic legitimacy is unverified.
-- No-inflation arguments remain conditional on custom proof/signature soundness,
-  generator independence and discrete-log hardness; no independent crypto proof.
-- Same-fee destination collisions block repeated fees under historical uniqueness
-  (SP1). No destination/issuance constants were silently changed.
-- Full-history staging and atomic Badger capacity are unresolved (SP2/SP3).
-  Failure atomicity tests do not prove every legal transition can be applied.
-- Memory AddBlock state is not durably committed per block; explicit Save/Close
-  provides a snapshot. Badger sync-write durability still depends on OS/storage.
-- Remote codec bounds do not establish arbitrary long-history resource bounds,
-  maximum-size backend parity, complete crash recovery or Sybil resilience.
+| Guard | Code | Test that fails without it |
+|---|---|---|
+| Coinbase output commit equals kernel excess | `validateBody` | `TestCoinbaseOutputMustCommitToKernelExcess` |
+| Coinbase forbidden when reward + F is 0 | `validateBody` | `TestCoinbaseForbiddenWhenBlockPaysNothing` |
+| Coinbase kernel fee is 0 | `validateBody` | `TestCoinbaseKernelFeeIsRejected`, `TestSecurityBlockAuthorizationMutations` (cases "coinbase fee", "coinbase lock" check the rule's own error) |
+| Same fee total in balance and coinbase amount | `PlainKernelFees` | `TestFeeTotalsIgnoreCoinbaseKernels` (helper test), `TestCoinbaseKernelFeeIsRejected` |
+| Coinbase maturity, exact boundary | `validateBody` | `TestFeeCarryingCoinbaseMaturityBoundary` |
+| Capacity kept for the coinbase, mempool | `checkTransactionCheap`, `CoinbaseReserve` | `TestTransactionLeavesRoomForCoinbase`, `TestCoinbaseReserveTable` (helper test) |
+| Capacity kept for the coinbase, miner | `selectTransactions`, `CoinbaseReserve` | `TestSelectionReservesCoinbaseCapacity`, `TestCoinbaseReserveTable` (helper test) |
+| Supply equals rewards, including fee-carrying coinbase spends and after emission | whole `validateBody` | `TestSupplyEqualsRewardsWithFeesAndReorg`, `TestFeeCarryingCoinbaseMaturityBoundary`, `TestPostEmissionRunConservesSupply` |
+| A mined transaction stays restorable after a reorg | `Pool.Confirmed`, `Miner.confirmMined` | `TestConfirmedKeepsMinedTransactionsForReorg`, `TestMinedTransactionsAreStashedForReorg` |
 
-## Version3 follow-up evidence (supersedes earlier SP1/SP2/SP3 open dispositions)
+Limits of this evidence: the post-emission cases run through a synthetic schedule
+store (the difficulty window and tip are synthetic; UTXO, output and kernel
+indexes are real), not through 2.31 million mined blocks. The miner's
+post-emission selection is tested through `selectTransactions` at the schedule
+heights, not through a running miner. Wallet, RPC and P2P packages were not run
+against mutants.
 
-SP123_COMPLETION.md records the frozen-source full build/vet/test/race and
-combined storage results. SP1 preserves fee value/recipient with a context-bound
-public blinding tweak; SP2 preserves the state equation through exact UndoAt and
-suffix overlay; SP3 preserves atomic visibility through a durable MVCC fence.
+## Known exceptions to unqualified claims
 
-New real AddBlock equal-fee/restart/reorg and negative-context regressions cover
-SP1. Large-history count/read guards and exact undo/history tombstones cover the
-SP2 algorithm change. Interrupted stage/genesis/different retry, large aggregate
-publication and exact structural-body storage parity cover SP3. Synthetic large
-storage fixtures are not claimed as cryptographically valid maximum-size blocks.
-
-Normal reorg cost no longer scales with retained prefix length. Full startup,
-trusted import and explicit memory Save still inspect history. Bounded protocol
-suffixes may still be large, and retained MVCC versions/recovery scans lack an
-independently verified lifecycle budget. These limits, cryptographic assurance,
-legacy trust and actual device durability remain release gates.
-
-## Version4 implemented boundaries and explicit assumptions
-
-The earlier all-claims-disabled description is historical. `validateLegacyClaims`
-now loads trusted active state plus canonical genesis/network, verifies strict
-DER low-S ECDSA-SHA256 for the exact source/destination leg, checks individual
-commitment difference and Schnorr, and consumes the source atomically. Shared
-legs, unreferenced kernels and legacy metadata on native inputs fail closed.
-`TestLegacyClaimV4BothBackends` and durable restart cover accepted synthetic
-trusted claims and negative/context/replay/reorg cases. This provides ownership
-conditional on the trust anchor; it does not prove historical issuance.
-
-Version4 native bounds are4 inputs/4 outputs/4 kernels,64KiB structural body,
-14529-byte proof ceiling and1024 reorg depth. Every legal native suffix fits the
-64MiB aggregate body budget. Undo checks occur before clone/decode. Chain,
-network decoder and pool charge the two claim IDs and public-key text; admission
-and miner reserve mandatory subsidy/fee slots. Exact-bound/+1, real four-input
-native payments and raw1024-block storage tests are separate evidence.
-
-Badger snapshot registration is atomic with fence observation/publication.
-Discard is the minimum active/pinned reader timestamp. Failed stages restore
-same-state keys before a different candidate is staged; recovery skips older
-same-key versions and fails unchanged above65536 keys. Persistent replay uses
-one block/record at a time in a disposable bounded-cache disk-backed store.
-Lifecycle, actual LSM compaction, failed retry, abrupt exit, recovery boundary,
-state corruption and scratch cleanup tests support these specific invariants.
-O(history) scratch disk/time, pinned-reader retention and persistent fault disk
-growth remain explicit limits, not violations hidden by claiming constant space.
-
-See BLOCKERS_V4.md for file/function/test mapping and final executed logs. Native
-no-inflation remains conditional on custom cryptographic soundness and trusted
-genesis; independent crypto and historical supply reconciliation remain blocked.
+- **Clocks.** The 540 s future-timestamp rule uses the validator's clock and
+  applies to new blocks only (replay of stored blocks does not re-check it).
+  Validators near the bound can briefly disagree. There is no median-past-time
+  rule by decision: strictly increasing timestamps are retained (simulation in
+  `v2/pow/timewarp_sim_test.go`).
+- **Cryptographic conditionality.** The no-inflation argument holds only if the
+  custom Schnorr signature and range proof are sound, the second generator `H`
+  has no known discrete log relative to `G`, and the discrete-log problem is
+  hard. None of this has been independently reviewed.
+- **Memory backend.** The in-memory store writes a snapshot only on explicit
+  `Save` or `Close`. The daemon uses the Badger backend. Durability of Badger
+  depends on the operating system and storage hardware.
+- **Capacity.** Atomic failure tests do not prove that every legal transition
+  can be applied under all memory and disk conditions. Startup replay is linear
+  in history in time and scratch disk. See [limits](https://github.com/pasichDev/noso-go/blob/main/docs/limits.md).
+- **Network.** Decoder bounds do not establish resistance to Sybil or eclipse
+  attacks or a bound on total resource use by many peers.

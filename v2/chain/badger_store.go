@@ -20,9 +20,12 @@ import (
 // BadgerDB key layout (single shared keyspace, prefix-byte tagged):
 //
 //	'b' || u64(height)            -> gob-encoded *types.Block
-//	'h' || sha256(hash)           -> u64(height)
+//	'h' || header_id_32b          -> u64(height)
 //	'u' || commit_33b             -> gob-encoded types.Output (UTXO)
-//	'l' || legacy_address         -> commit_33b (UTXO lookup by address)
+//	'o' || commit_33b             -> u64(creation height) (ever-created output)
+//	'k' || kernel_id_32b          -> presence marker
+//	'd' || u64(height)            -> gob-encoded spent outputs (undo)
+//	'a'                           -> durable MVCC fence
 //	't'                           -> u64(tip_height)   (singleton)
 //
 // Blocks, outputs and undo records use gob; heights, commitments and presence
@@ -31,15 +34,14 @@ const (
 	kBlock      = byte('b')
 	kHash       = byte('h')
 	kUTXO       = byte('u')
-	kLegacy     = byte('l')
 	kTip        = byte('t')
 	kOutputSeen = byte('o')
 	kKernelSeen = byte('k')
 	kUndo       = byte('d')
 	kActive     = byte('a')
-	// A v4 maximum-depth suffix touches fewer than 44*1024+1 distinct keys;
-	// trusted genesis touches at most 3*10000+4. One recovery stage is bounded
-	// by the larger envelope, not an unbounded union of failed candidates.
+	// A maximum-depth suffix touches fewer than 44*1024+1 distinct keys (genesis
+	// is empty). One recovery stage is bounded by that envelope, not by an
+	// unbounded union of failed candidates.
 	MaxRecoveryKeys = 64 << 10
 )
 
@@ -49,6 +51,7 @@ const (
 type BadgerStore struct {
 	db     *badger.DB
 	mu     sync.Mutex
+	faults atomic.Uint64
 	active atomic.Uint64
 	next   uint64
 	dirty  map[string]struct{}
@@ -90,8 +93,7 @@ func openBadger(opts badger.Options) (*BadgerStore, error) {
 		it.Close()
 		if nonempty {
 			txn.Discard()
-			db.Close()
-			return nil, errors.New("badger: old or incomplete schema; explicit reset required")
+			return nil, errors.Join(errors.New("badger: old or incomplete schema; explicit reset required"), db.Close())
 		}
 		// Establish the schema before the first stage, so interrupted genesis
 		// initialization is recoverable without confusing it with an old schema.
@@ -103,14 +105,12 @@ func openBadger(opts badger.Options) (*BadgerStore, error) {
 		fence.Discard()
 		if err != nil {
 			txn.Discard()
-			db.Close()
-			return nil, err
+			return nil, errors.Join(err, db.Close())
 		}
 		s.active.Store(1)
 	} else if err != nil {
 		txn.Discard()
-		db.Close()
-		return nil, err
+		return nil, errors.Join(err, db.Close())
 	} else {
 		var ts uint64
 		err = item.Value(func(raw []byte) error {
@@ -122,8 +122,7 @@ func openBadger(opts badger.Options) (*BadgerStore, error) {
 		})
 		if err != nil || ts == 0 || ts != item.Version() {
 			txn.Discard()
-			db.Close()
-			return nil, errors.New("badger: invalid active fence")
+			return nil, errors.Join(errors.New("badger: invalid active fence"), db.Close())
 		}
 		s.active.Store(ts)
 	}
@@ -134,8 +133,7 @@ func openBadger(opts badger.Options) (*BadgerStore, error) {
 	s.dirty, err = recoverDirtyKeys(txn, s.active.Load(), MaxRecoveryKeys)
 	if err != nil {
 		txn.Discard()
-		db.Close()
-		return nil, err
+		return nil, errors.Join(err, db.Close())
 	}
 	txn.Discard()
 	s.advanceDiscardLocked()
@@ -351,6 +349,26 @@ func (s *BadgerStore) hasSeen(prefix byte, id []byte) bool {
 func (s *BadgerStore) HasOutput(c types.Commitment) bool { return s.hasSeen(kOutputSeen, c[:]) }
 func (s *BadgerStore) HasKernel(h types.Hash) bool       { return s.hasSeen(kKernelSeen, h[:]) }
 
+// OutputHeight returns the creation height recorded with the output-seen
+// marker. A malformed marker reads as unknown.
+func (s *BadgerStore) OutputHeight(c types.Commitment) (uint64, bool) {
+	var h uint64
+	err := s.view(func(txn *badger.Txn) error {
+		it, err := txn.Get(append([]byte{kOutputSeen}, c[:]...))
+		if err != nil {
+			return err
+		}
+		return it.Value(func(val []byte) error {
+			if len(val) != 8 {
+				return errors.New("badger: invalid output height record")
+			}
+			h = bytesToU64(val)
+			return nil
+		})
+	})
+	return h, err == nil
+}
+
 // UTXOByCommit returns the unspent output for a commitment.
 func (s *BadgerStore) UTXOByCommit(commit types.Commitment) (*types.Output, bool) {
 	var raw []byte
@@ -372,35 +390,6 @@ func (s *BadgerStore) UTXOByCommit(commit types.Commitment) (*types.Output, bool
 		return nil, false
 	}
 	return o, true
-}
-
-// UTXOByLegacyAddress returns the legacy output for the given address.
-func (s *BadgerStore) UTXOByLegacyAddress(addr string) (*types.Output, bool) {
-	var out *types.Output
-	err := s.view(func(txn *badger.Txn) error {
-		item, err := txn.Get(append([]byte{kLegacy}, []byte(addr)...))
-		if err != nil {
-			return err
-		}
-		c, err := item.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-		if len(c) != 33 {
-			return errors.New("badger: invalid legacy index")
-		}
-		item, err = txn.Get(append([]byte{kUTXO}, c...))
-		if err != nil {
-			return err
-		}
-		raw, err := item.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-		out, err = decodeOutput(raw)
-		return err
-	})
-	return out, err == nil
 }
 
 // WriteBlock appends b at tip+1 and applies its UTXO delta.
@@ -517,13 +506,6 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 		// Remove spent inputs.
 		for i := range b.Inputs {
 			c := b.Inputs[i].Commit
-			// Drop legacy index if present.
-			out := spent[i]
-			if out.Features == types.OutputFeaturesLegacy {
-				if err := txn.Delete(append([]byte{kLegacy}, []byte(out.LegacyAddress)...)); err != nil {
-					return err
-				}
-			}
 			if err := txn.Delete(append([]byte{kUTXO}, c[:]...)); err != nil {
 				return err
 			}
@@ -531,7 +513,7 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 		// Add new outputs.
 		for i := range b.Outputs {
 			out := b.Outputs[i]
-			if err := txn.Set(append([]byte{kOutputSeen}, out.Commit[:]...), []byte{1}); err != nil {
+			if err := txn.Set(append([]byte{kOutputSeen}, out.Commit[:]...), u64ToBytes(height)); err != nil {
 				return err
 			}
 			val, err := encodeOutput(&out)
@@ -540,11 +522,6 @@ func (s *BadgerStore) WriteBlock(b *types.Block) error {
 			}
 			if err := txn.Set(append([]byte{kUTXO}, out.Commit[:]...), val); err != nil {
 				return err
-			}
-			if out.Features == types.OutputFeaturesLegacy {
-				if err := txn.Set(append([]byte{kLegacy}, []byte(out.LegacyAddress)...), append([]byte(nil), out.Commit[:]...)); err != nil {
-					return err
-				}
 			}
 		}
 		for _, k := range b.Kernels {
@@ -638,8 +615,8 @@ func stateEntries(blocks []*types.Block) (map[string][]byte, error) {
 		hash := types.HeaderID(&b.Header)
 		entries[string(append([]byte{kHash}, hash[:]...))] = u64ToBytes(b.Header.Height)
 	}
-	for c := range staged.outputSeen {
-		entries[string(append([]byte{kOutputSeen}, c[:]...))] = []byte{1}
+	for c, h := range staged.outputSeen {
+		entries[string(append([]byte{kOutputSeen}, c[:]...))] = u64ToBytes(h)
 	}
 	for id := range staged.kernelSeen {
 		entries[string(append([]byte{kKernelSeen}, id[:]...))] = []byte{1}
@@ -650,9 +627,6 @@ func stateEntries(blocks []*types.Block) (map[string][]byte, error) {
 			return nil, err
 		}
 		entries[string(append([]byte{kUTXO}, c[:]...))] = raw
-	}
-	for addr, c := range staged.legacyIdx {
-		entries[string(append([]byte{kLegacy}, []byte(addr)...))] = append([]byte(nil), c[:]...)
 	}
 	if len(blocks) > 0 {
 		entries[string([]byte{kTip})] = u64ToBytes(blocks[len(blocks)-1].Header.Height)
@@ -676,18 +650,22 @@ func (s *BadgerStore) ReplaceChain(blocks []*types.Block) error {
 				continue
 			}
 			if _, ok := entries[string(key)]; !ok {
-				txn.Delete(key)
+				if err := txn.Delete(key); err != nil {
+					return err
+				}
 			}
 		}
 		for key, val := range entries {
-			txn.Set([]byte(key), val)
+			if err := txn.Set([]byte(key), val); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
 }
 
 func (s *BadgerStore) ReplaceSuffix(ancestor uint64, incoming []*types.Block) error {
-	if len(incoming) > 1024 {
+	if len(incoming) > MaxReorgBlocks {
 		return ErrTooDeep
 	}
 	s.mu.Lock()
@@ -753,10 +731,10 @@ func suffixEntries(d *suffixDelta) (map[string][]byte, error) {
 		}
 		entries[string(append([]byte{kUTXO}, c[:]...))] = raw
 	}
-	for c, present := range d.Outputs {
+	for c, created := range d.Outputs {
 		var raw []byte
-		if present {
-			raw = []byte{1}
+		if created != nil {
+			raw = u64ToBytes(*created)
 		}
 		entries[string(append([]byte{kOutputSeen}, c[:]...))] = raw
 	}
@@ -766,13 +744,6 @@ func suffixEntries(d *suffixDelta) (map[string][]byte, error) {
 			raw = []byte{1}
 		}
 		entries[string(append([]byte{kKernelSeen}, h[:]...))] = raw
-	}
-	for addr, c := range d.Legacy {
-		var raw []byte
-		if c != nil {
-			raw = append([]byte{}, c[:]...)
-		}
-		entries[string(append([]byte{kLegacy}, []byte(addr)...))] = raw
 	}
 	entries[string([]byte{kTip})] = u64ToBytes(d.Tip.Height)
 	return entries, nil
@@ -790,8 +761,17 @@ func (t *stageTxn) Delete(k []byte) error { t.entries[string(k)] = nil; return n
 func (s *BadgerStore) view(fn func(*badger.Txn) error) error {
 	txn, release := s.snapshot()
 	defer release()
-	return fn(txn)
+	err := fn(txn)
+	if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+		s.faults.Add(1)
+	}
+	return err
 }
+
+// Faults counts read errors other than "key not found". Several accessors turn a
+// read error into "absent"; the chain compares this counter around a validation
+// to tell a disk fault from an invalid block.
+func (s *BadgerStore) Faults() uint64 { return s.faults.Load() }
 
 // snapshot pins the active timestamp until the transaction has been discarded.
 // Never hold readersMu while doing I/O or invoking a callback: a writer can

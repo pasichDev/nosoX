@@ -1,6 +1,7 @@
 package mempool
 
 import (
+	"errors"
 	"github.com/pasichDev/noso-go/v2/types"
 	"testing"
 )
@@ -52,37 +53,38 @@ func TestPoolOwnsTransactions(t *testing.T) {
 }
 func TestPoolRejectsConflictingInputs(t *testing.T) {
 	p := NewValidated(4, func(*types.Transaction) error { return nil })
-	a, b := mkTx(1), mkTx(2)
+	a, b := mkTx(2), mkTx(1)
 	a.Inputs = []types.Input{{Commit: types.Commitment{1}}}
 	b.Inputs = a.Inputs
 	if _, e := p.Add(a); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := p.Add(b); e == nil {
-		t.Fatal("conflicting spend admitted")
+	if _, e := p.Add(b); !errors.Is(e, ErrConflict) {
+		t.Fatalf("lower-paying conflicting spend: %v", e)
 	}
 }
 
 // Structural admission uses a stub only to isolate the byte-accounting boundary;
 // successful admission here makes no claim about ownership validation.
-func TestPoolV4ClaimBudgetAndRemoval(t *testing.T) {
+func TestPoolByteBudgetAndRemoval(t *testing.T) {
 	p := NewValidated(2, func(*types.Transaction) error { return nil })
 	tx := mkTx(1)
-	tx.Inputs = []types.Input{{LegacyPubKey: string(make([]byte, 88)), LegacyOutputID: types.Hash{1}, LegacyKernelID: types.Hash{2}}}
+	tx.Inputs = []types.Input{{Commit: types.Commitment{1}}}
+	tx.Outputs = []types.Output{{RangeProof: make([]byte, types.MaxRangeProofBytes)}}
 	id, err := p.Add(tx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.bytes < 64+88 {
-		t.Fatal("claim fields not charged")
+	if p.bytes < 64+types.MaxRangeProofBytes {
+		t.Fatal("input and proof bytes not charged")
 	}
 	p.Remove(id)
 	if p.bytes != 0 {
 		t.Fatalf("byte charge leaked after removal: %d", p.bytes)
 	}
-	tx.Inputs[0].LegacyPubKey += "x"
+	tx.Outputs[0].RangeProof = append(tx.Outputs[0].RangeProof, 0)
 	if _, err := p.Add(tx); err == nil {
-		t.Fatal("oversized public key admitted")
+		t.Fatal("oversized range proof admitted")
 	}
 	if p.bytes != 0 || len(p.entries) != 0 {
 		t.Fatal("failed admission changed pool")

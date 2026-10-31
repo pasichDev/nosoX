@@ -14,9 +14,8 @@ type suffixDelta struct {
 	Undo    map[uint64][]types.Output
 	Hashes  map[types.Hash]*uint64
 	UTXOs   map[types.Commitment]*types.Output
-	Outputs map[types.Commitment]bool
+	Outputs map[types.Commitment]*uint64
 	Kernels map[types.Hash]bool
-	Legacy  map[string]*types.Commitment
 	Tip     types.BlockHeader
 }
 type forkStore struct {
@@ -42,7 +41,7 @@ func newForkStore(base Store, ancestor uint64) (*forkStore, error) {
 	}
 	f := &forkStore{base: base, changes: suffixDelta{
 		Blocks: map[uint64]*types.Block{}, Undo: map[uint64][]types.Output{}, Hashes: map[types.Hash]*uint64{},
-		UTXOs: map[types.Commitment]*types.Output{}, Outputs: map[types.Commitment]bool{}, Kernels: map[types.Hash]bool{}, Legacy: map[string]*types.Commitment{}, Tip: tip,
+		UTXOs: map[types.Commitment]*types.Output{}, Outputs: map[types.Commitment]*uint64{}, Kernels: map[types.Hash]bool{}, Tip: tip,
 	}}
 	for h := tip.Height; h > ancestor; h-- {
 		b, err := base.BlockAt(h)
@@ -61,7 +60,7 @@ func newForkStore(base Store, ancestor uint64) (*forkStore, error) {
 		}
 		for i, in := range b.Inputs {
 			o := undo[i]
-			if o.Commit != in.Commit || o.Features != in.Features || o.LegacyAddress != in.LegacyAddr || o.LegacyAmount != in.LegacyAmount {
+			if o.Commit != in.Commit || o.Features != in.Features {
 				return nil, errors.New("store: undo metadata mismatch")
 			}
 		}
@@ -70,10 +69,7 @@ func newForkStore(base Store, ancestor uint64) (*forkStore, error) {
 		f.changes.Hashes[types.HeaderID(&b.Header)] = nil
 		for _, o := range b.Outputs {
 			f.changes.UTXOs[o.Commit] = nil
-			f.changes.Outputs[o.Commit] = false
-			if o.Features == types.OutputFeaturesLegacy {
-				f.changes.Legacy[o.LegacyAddress] = nil
-			}
+			f.changes.Outputs[o.Commit] = nil
 		}
 		for _, k := range b.Kernels {
 			f.changes.Kernels[types.KernelID(&k)] = false
@@ -82,10 +78,6 @@ func newForkStore(base Store, ancestor uint64) (*forkStore, error) {
 		for _, o := range undo {
 			o := o
 			f.changes.UTXOs[o.Commit] = &o
-			if o.Features == types.OutputFeaturesLegacy {
-				v := o.Commit
-				f.changes.Legacy[o.LegacyAddress] = &v
-			}
 		}
 	}
 	b, err := base.BlockAt(ancestor)
@@ -156,10 +148,17 @@ func (f *forkStore) UTXOByCommit(c types.Commitment) (*types.Output, bool) {
 }
 func (f *forkStore) HasUTXO(c types.Commitment) bool { _, ok := f.UTXOByCommit(c); return ok }
 func (f *forkStore) HasOutput(c types.Commitment) bool {
+	_, ok := f.OutputHeight(c)
+	return ok
+}
+func (f *forkStore) OutputHeight(c types.Commitment) (uint64, bool) {
 	if v, ok := f.changes.Outputs[c]; ok {
-		return v
+		if v == nil {
+			return 0, false
+		}
+		return *v, true
 	}
-	return f.base.HasOutput(c)
+	return f.base.OutputHeight(c)
 }
 func (f *forkStore) HasKernel(h types.Hash) bool {
 	if v, ok := f.changes.Kernels[h]; ok {
@@ -167,19 +166,7 @@ func (f *forkStore) HasKernel(h types.Hash) bool {
 	}
 	return f.base.HasKernel(h)
 }
-func (f *forkStore) UTXOByLegacyAddress(addr string) (*types.Output, bool) {
-	if c, ok := f.changes.Legacy[addr]; ok {
-		if c == nil {
-			return nil, false
-		}
-		return f.UTXOByCommit(*c)
-	}
-	o, ok := f.base.UTXOByLegacyAddress(addr)
-	if !ok {
-		return nil, false
-	}
-	return f.UTXOByCommit(o.Commit)
-}
+
 func (f *forkStore) WriteBlock(b *types.Block) error {
 	if b == nil {
 		return errors.New("store: nil block")
@@ -208,18 +195,12 @@ func (f *forkStore) WriteBlock(b *types.Block) error {
 	b = cloneBlock(b)
 	for _, o := range spent {
 		f.changes.UTXOs[o.Commit] = nil
-		if o.Features == types.OutputFeaturesLegacy {
-			f.changes.Legacy[o.LegacyAddress] = nil
-		}
 	}
 	for _, o := range b.Outputs {
 		o := o
 		f.changes.UTXOs[o.Commit] = &o
-		f.changes.Outputs[o.Commit] = true
-		if o.Features == types.OutputFeaturesLegacy {
-			v := o.Commit
-			f.changes.Legacy[o.LegacyAddress] = &v
-		}
+		oh := b.Header.Height
+		f.changes.Outputs[o.Commit] = &oh
 	}
 	for _, k := range b.Kernels {
 		f.changes.Kernels[types.KernelID(&k)] = true
@@ -311,10 +292,10 @@ func (s *memStore) ReplaceSuffix(ancestor uint64, incoming []*types.Block) error
 		}
 	}
 	for c, v := range d.Outputs {
-		if !v {
+		if v == nil {
 			delete(s.outputSeen, c)
 		} else {
-			s.outputSeen[c] = true
+			s.outputSeen[c] = *v
 		}
 	}
 	for h, v := range d.Kernels {
@@ -322,13 +303,6 @@ func (s *memStore) ReplaceSuffix(ancestor uint64, incoming []*types.Block) error
 			delete(s.kernelSeen, h)
 		} else {
 			s.kernelSeen[h] = true
-		}
-	}
-	for a, v := range d.Legacy {
-		if v == nil {
-			delete(s.legacyIdx, a)
-		} else {
-			s.legacyIdx[a] = *v
 		}
 	}
 	return nil
@@ -361,7 +335,7 @@ func (f *forkStore) storeDeltaReader() deltaReader {
 		},
 		seenOutput: func(c types.Commitment) (bool, error) {
 			if v, ok := f.changes.Outputs[c]; ok {
-				return v, nil
+				return v != nil, nil
 			}
 			return base.seenOutput(c)
 		},

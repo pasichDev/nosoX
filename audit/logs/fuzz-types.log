@@ -1,6 +1,0 @@
-fuzz: elapsed: 0s, gathering baseline coverage: 0/1 completed
-fuzz: elapsed: 0s, gathering baseline coverage: 1/1 completed, now fuzzing with 2 workers
-fuzz: elapsed: 3s, execs: 180821 (60267/sec), new interesting: 5 (total: 6)
-fuzz: elapsed: 5s, execs: 306358 (60368/sec), new interesting: 5 (total: 6)
-PASS
-ok  	github.com/pasichDev/noso-go/v2/types	5.084s

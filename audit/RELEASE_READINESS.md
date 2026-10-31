@@ -1,88 +1,54 @@
-# Release readiness — strict gates
+# Release readiness
 
-Decision: **RESEARCH ONLY / MAINNET BLOCKED**. No independent audit has occurred.
-No mainnet/public-testnet deployment is authorized by this review. Current small
-local devnet tests are evidence, not a blanket LOCAL DEVNET READY designation.
+**Decision: not ready for mainnet. Do not hold value.**
 
-| Gate | Status | Evidence / blocker |
+No independent audit has taken place. The review round of 2026-10-31 was done
+by AI-assisted internal reviews, not by an outside party; its findings are in
+[SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) and most are still open. `nosoxd` refuses to start with
+`-network mainnet`. The table below is the current gate list. A gate is only
+"met" where it can be checked in the repository. "Covered locally" means
+tests exist; it does not mean the property is proven.
+
+| Gate | Status | Detail |
 |---|---|---|
-| Baseline commit/toolchain/results preserved | Met | BASELINE_TREE.tsv; TEST_REPORT.md; baseline logs |
-| Required native signatures and exact subsidy | Covered locally | Real AddBlock negative controls on both stores, schedule boundaries |
-| Legacy ownership | Implemented for trusted genesis, historical approval blocked | Version4 ECDSA ownership binds canonical source/network/genesis/exact destination leg; real proof/kernel/conservation tests on both stores/restart/reorg; no authenticated mainnet snapshot |
-| Proof-shape bypass removal | Met for stated bypass | Legacy proof rejected; real cryptographic verification retained |
-| Independently reviewed proof system and signing | Blocked | Custom Schnorr/OR range proof; variable-time secret paths |
-| Complete body binding and history uniqueness | Covered locally | Version4 complete roots/TxID, existing kernel/output IDs, mutation/replay tests and persisted historical indexes |
-| Atomic small reorg and storage fault recovery | Covered locally | Full-state equality, actual Badger limit failure, abrupt process exit |
-| All legal backend transition capacity/parity | Blocked | Version4 bounds4/4/4 items,64KiB body and predecode undo; fenced batches preserve aggregate atomic visibility;1024 raw maximum-shape transitions measured, full maximum valid fork still unmeasured |
-| Bounded long-chain reorg/restart resources | Blocked | Suffix-only staging; reader-safe discard,65536-key recovery cap, separate dirty restore and disk-backed streaming startup implemented; physical failure-loop growth and whole-process capacity remain limited |
-| Fee transfer conservation and usable repeated fees | Covered locally | Version3 context tweak preserves F/recipient and supports repeated fees; off-repo wallet must adopt tweak helper |
-| Fork choice by valid accumulated work | Covered locally | Fully mined shorter-heavier fork; strict ties; exact target-derived work |
-| Timestamp/difficulty design | Partial | Overflow/freeze checks covered; clocks and published-LWMA equivalence unresolved |
-| Independently reconciled migration/genesis | Blocked | Malformed historical accounts and no authenticated issuance reconstruction |
-| Safe public P2P/RPC operation | Blocked | Bounded local tests do not establish global budgets, Sybil/eclipse resilience |
-| Wallet usability/secret assurance | Blocked | Intent envelopes are not complete MW payments; plaintext miner secrets and CT gaps |
-| Full current checks | Consult TEST_REPORT | Exact exit statuses; unavailable tools not marked successful |
-| Exhaustive crash/power-loss and long-term tests | Blocked | Finite subprocess/fault tests, no full OS power-cut matrix |
-| Dedicated history secret scan | Incomplete | Not completed; dedicated scanners unavailable; no new scanning in verification pass |
-| Repository publication authorization/settings | Not changed | Private+archived observed; archive prevents requested PR |
+| NX-018: independent review of the custom Schnorr signature and range proof | **Open** | No reviewer engaged. See [EXTERNAL_CRYPTO_REVIEW_PACKET.md](EXTERNAL_CRYPTO_REVIEW_PACKET.md). |
+| NX-019: constant-time secret arithmetic | **Open** | Signing, commitment and proving use variable-time code on secrets. Names containing `ConstantTime` are historical and do not describe behavior. |
+| NX-020: provenance of initial supply | **Closed by removal** | Protocol version 5 has no migration of any earlier chain. Genesis is empty and every coin is mined. |
+| Wallet spending | Covered locally; open findings | Two-party payments (`pay`, `receive`, `finalize`) with encrypted output tracking. Tests: a real miner on the memory and Badger stores, payment through the mempool into a block accepted by `AddBlock`, onward spend, node restart and reorg with resubmission; adversarial slate and nonce tests; a test driving the real `nosoxd` and `nosox-cli` binaries. Secret arithmetic is still variable-time (NX-019), and reward keys stay plaintext on the node. Limits: at most 4 inputs per payment, no seed-based recovery, unauthenticated slates (IR-W-H4), no payment proofs. The file can no longer be bricked at the record cap (IR-W-H1) and a full wallet can pay and consolidate (PR4-W2); a lying node can no longer make the wallet delete a key (PR4-W1: finished records move to the encrypted archive); the 30-day loss of late receives (IR-X-W1) is fixed with tests; nonce reuse on state rollback (IR-W-M3) is mitigated, not closed, and `cancel` after a restore keeps the change key (PR4-W3); Windows durability (IR-W-H5) is changed in code and unproven on Windows. See [wallet](../docs/wallet.md). |
+| Dev-fund point provenance | **Closed by removal** | The dev fund no longer exists (IR-W-H3). Fees go to the miner; there is no founder allocation or protocol fee, and the unspent set sums to the cumulative subsidy. Tests: `TestCoinbaseMustClaimExactlyRewardPlusFees`, `TestPostEmissionCoinbaseIsFeesOnly`, `TestSupplyEqualsRewardsWithFeesAndReorg`, `TestOutputFeatureTwoIsRejected`, `TestCandidateCoinbasePaysRewardPlusFees`. |
+| Internal review round 2026-10-31 | Partly closed | Most findings now have a fix in the tree with a named regression test (fork convergence IR-N1, mempool following blocks IR-N2, 540 s future limit IR-C-F1, miner failures IR-N10, wallet fund loss IR-X-W1); see [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md). Still open: unauthenticated slates (IR-W-H4), the rows marked Open there. Windows durability (IR-W-H5) is changed in code but has not run on Windows. |
+| Subsidy and kernel authorization | Covered locally | Missing or forged signatures and subsidy rejected through `AddBlock` on both stores. |
+| Complete body binding and history uniqueness | Covered locally | Roots over all body fields; replay of spent commitments and kernels rejected. |
+| Atomic reorganization and fork choice | Covered locally | Strictly greater accumulated work required; injected commit failure leaves state unchanged. |
+| Fee routing and repeated equal fees | Covered locally | Coinbase = subsidy + fees, exactly, on both stores and after emission ends; repeated equal fees give distinct commitments. Tests: `TestSP1ConsecutiveEqualFees`, `TestCoinbaseMustClaimExactlyRewardPlusFees`, `TestPostEmissionCoinbaseIsFeesOnly`, `TestSupplyEqualsRewardsWithFeesAndReorg`, `TestOutputFeatureTwoIsRejected`, `TestCandidateCoinbasePaysRewardPlusFees`. |
+| Capacity and durability | **Open** | Consensus bounds are in place (4 inputs, 4 outputs, 4 kernels, 64 KiB body, 1024-block reorg depth). A maximum-size, cryptographically valid fork has not been measured. There is no power-loss test matrix. Startup replay is linear in history. |
+| Safe public P2P and RPC operation | **Open** | Message and range bounds exist. There is no global resource budget and no eclipse or Sybil analysis. The CLI sends an RPC bearer token from `NOSOX_RPC_TOKEN`; the RPC rate-limits per client address. The HTTP seed list needs the `seeds-v1` tag, which does not exist yet; until it is created `-http-seeds` finds no peers. |
+| Difficulty and timestamps | Partial | Arithmetic is overflow-safe. Equivalence to a published LWMA-3 is not established. Timestamps strictly increase and may be at most 540 s ahead of the validator clock (new blocks only). No median-past-time rule, by decision: a simulation (`v2/pow/timewarp_sim_test.go`) showed it is worse than strict increase plus a short future limit. |
+| Checkpoints | **Open** | The daemon verifies the baked set and launcher signature at startup and pins the list. The set is empty and no launcher key exists, so nothing is pinned yet. |
+| Miner key storage | **Open** | Reward blinding factors are kept in plaintext in `coinbases.json` and its archives `coinbases.json.<ts>.<n>` (files `0600`, data directory `0700`, not encrypted). Keys are written only for solved blocks, before the block is added. `wallet import-coinbase` reads the archives too. |
+| Genesis and launch parameters | **Open** | Mainnet genesis parameters (timestamp, initial difficulty) are defaults in code. No launch procedure has been exercised and no seed nodes exist. |
+| Reproducible builds | Not verified | The build script and flags are designed for reproducibility. Independent rebuilds have not been compared. |
+| Release integrity | Changed, not exercised | The release workflow now uses per-job least privilege, SHA-pinned actions, no cache, a combined `SHA256SUMS` that `scripts/verify-release.sh` consumes and a build-provenance attestation. It has not run on GitHub. Attestations need a public repository (or a plan that supports them). No offline signature is produced; `--sign` in `scripts/build-release.sh` is manual. Repository settings (branch and tag protection, reviewers on the `release` environment) are not checked here. |
+| Continuous integration | Not demonstrated | The workflows in `.github/workflows` have not yet run on the public repository. |
+| Dependencies | Mitigated | The upgrade is applied (x/crypto 0.58, x/net 0.62, x/text, x/sys, x/term, klauspost/compress, pion/stun, OpenTelemetry). `govulncheck ./...` reports no reachable vulnerability; one advisory remains in a required module (GO-2026-5932, x/crypto `openpgp`, not imported, no fix upstream). libp2p stays at 0.48 and quic-go at 0.60: libp2p 0.51 and quic-go 0.64 build and pass the p2p tests, but they pull `decred/secp256k1` 4.4.1, which deprecates the `elliptic.Curve` calls in `v2/crypto` (9 staticcheck SA1019 findings), and libp2p-pubsub 0.19 changes the protobuf API a test uses. Moving them needs the crypto code ported to the new curve API first. Re-run `govulncheck` on every release candidate. |
+| History secret scan | Run once | `scripts/check-publication.sh` with gitleaks 8.30.1 scanned 32 commits and the working tree. One false positive (prose in a deleted document) is recorded in `.gitleaksignore`; no other findings. Re-run on every release candidate. |
 
-Source-code publication: feasible only as explicitly unsafe research after
-maintainer review of findings, disclosures and residual secrets. This task has
-not changed visibility or published a repository/release.
+## Publication checklist for maintainers
 
-Independent review: useful as input to a targeted cryptographic/design review.
-**Not a final external release-audit candidate** until the High blockers above
-are resolved and scope/compatibility decisions stabilize. Automated test success
-must never be substituted for an independent audit or supply reconciliation.
+Before changing repository visibility:
 
-Current SP1/SP2/SP3 implementation and exact integrated verification supersede
-previous open-finding descriptions: see SP123_COMPLETION.md. Closing specific
-code defects does not close the broader resource, crypto or migration gates.
+1. Fetch all refs and tags. Confirm the clone is not shallow.
+2. Run `scripts/check-publication.sh` with `gitleaks` installed. It scans
+   reachable history and the working tree and exits non-zero on any finding or
+   on a scan that cannot finish.
+3. Review flagged content by hand, including deleted files. A file deleted
+   from the tree is still in history. Rotate any real credential regardless of
+   history rewriting.
+4. Check documentation, author metadata and logs for personal information that
+   scanners cannot find.
+5. Enable GitHub private vulnerability reporting (see `SECURITY.md`).
+6. Keep the status notice in `README.md` and `docs/index.md` until the open
+   gates above are closed.
 
-## Version4 follow-up disposition
-
-BLOCKERS_V4.md, the frozen source manifest and logs/blockers-v4-final/ supersede
-older technical descriptions of disabled claims, discard timestamp zero and
-history-sized persistent RAM replay. They do not supersede external evidence
-requirements. NX-018/NX-019 cryptographic/side-channel assurance and NX-020
-historical economic authenticity remain **High release blockers**. Ordinary
-claim signatures are now required and implemented for explicitly trusted
-experimental genesis; that is not an approved historical mainnet migration.
-
-The experimental capacity target is at least2GiB, not a guaranteed memory ceiling.
-The latest1024-block raw storage fixtures use synthetic proof bytes and cannot
-stand in for a full maximum cryptographically valid fork. Tests, reviewed source
-and unresolved verification gaps are distinguished in the new reports.
-
-An external reviewer can begin targeted cryptographic/design assessment using
-EXTERNAL_CRYPTO_REVIEW_PACKET.md. The repository is not a final release-audit
-candidate, and no independent reviewer has certified it. No publication or
-repository visibility/archive change has occurred.
-
-## Follow-up: stacked defensive PR #5 (unverified)
-
-PR #5 adds fail-closed Badger historical lookup behavior, malformed hash-index
-rejection, miner cancellation/listener lifecycle fixes, HTTPS-only seed list
-retrieval (including rejection of redirects downgraded to HTTP), and isolated
-regression tests. It also adds `scripts/check-publication.sh` and
-`audit/PUBLIC_SOURCE_PREFLIGHT.md` for the source-code publication gate.
-
-**None of these changes have an executed green full-suite/race result yet.**
-GitHub Actions runs on this private repo terminate before executing any steps:
-the separate echo-only runner-smoke job fails too, and job logs are unavailable.
-Do not interpret that pre-runner failure as a verified Go test failure or
-assume it resolves after changing the workflow. Check Actions billing/budget,
-runner eligibility and account/repository restrictions; obtain a successful
-runner and repeat the documented checks before merging.
-
-The repo was observed private and unarchived at PR #5 creation; earlier
-"private+archived" status above is historical, not a current setting claim.
-
-Source-publication scanning has been *prepared*, not executed. It still needs
-a full local checkout, installed gitleaks, a scan of all local refs/working tree,
-human secret/privacy review, and explicit maintainer authorization.
-
-NX-018/NX-019 independent cryptographic review, NX-020 independently verified
-legacy supply/genesis, full valid-fork/capacity/durability experiments, and
-wallet/P2P assurances remain release blockers. No audit certification, public
-release or mainnet approval is implied by this PR.
+The script cannot prove that GitHub holds no unreachable objects, other refs
+or forks. A zero-finding run still needs a human review.

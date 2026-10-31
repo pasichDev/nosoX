@@ -14,7 +14,7 @@ func TestOutputIdentityBindsProof(t *testing.T) {
 func TestOutputIdentityBindsAllMetadata(t *testing.T) {
 	a := Output{Features: OutputFeaturesPlain}
 	b := a
-	b.LegacyAddress = "ignored"
+	b.Features = OutputFeaturesCoinbase
 	if OutputID(&a) == OutputID(&b) {
 		t.Fatal("metadata mutation preserves output identity")
 	}
@@ -25,18 +25,9 @@ func TestBodyCommitmentsBindEveryField(t *testing.T) {
 	mutations := []func(*Block){
 		func(b *Block) { b.Inputs[0].Commit[1]++ },
 		func(b *Block) { b.Inputs[0].Features++ },
-		func(b *Block) { b.Inputs[0].LegacySig = "s" },
-		func(b *Block) { b.Inputs[0].LegacyAddr = "a" },
-		func(b *Block) { b.Inputs[0].LegacyPubKey = "p" },
-		func(b *Block) { b.Inputs[0].LegacyOutputID[0]++ },
-		func(b *Block) { b.Inputs[0].LegacyKernelID[0]++ },
-		func(b *Block) { b.Inputs[0].LegacyAmount++ },
 		func(b *Block) { b.Outputs[0].Commit[1]++ },
 		func(b *Block) { b.Outputs[0].Features++ },
 		func(b *Block) { b.Outputs[0].RangeProof = []byte{1} },
-		func(b *Block) { b.Outputs[0].LegacyAddress = "a" },
-		func(b *Block) { b.Outputs[0].LegacyAmount++ },
-		func(b *Block) { b.Outputs[0].GVTNumber++ },
 		func(b *Block) { b.Kernels[0].Features++ },
 		func(b *Block) { b.Kernels[0].Fee++ },
 		func(b *Block) { b.Kernels[0].LockHeight++ },
@@ -70,10 +61,17 @@ func FuzzTransactionEncoding(f *testing.F) {
 		if len(a) > 4096 || len(b) > 4096 {
 			t.Skip()
 		}
-		x := Transaction{Inputs: []Input{{LegacySig: string(a), LegacyAddr: string(b)}}}
-		y := Transaction{Inputs: []Input{{LegacySig: string(append(append([]byte{}, a...), 0)), LegacyAddr: string(b)}}}
+		x := Transaction{Outputs: []Output{{RangeProof: a}}, Kernels: []Kernel{{ExcessSig: b}}}
+		y := Transaction{Outputs: []Output{{RangeProof: append(append([]byte{}, a...), 0)}}, Kernels: []Kernel{{ExcessSig: b}}}
 		if TransactionID(&x) == TransactionID(&y) {
 			t.Fatal("length-delimiting collision")
+		}
+		if len(a) > 0 {
+			// Moving a boundary byte between adjacent variable-length fields must change the ID.
+			z := Transaction{Outputs: []Output{{RangeProof: a[:len(a)-1]}}, Kernels: []Kernel{{ExcessSig: append([]byte{a[len(a)-1]}, b...)}}}
+			if TransactionID(&x) == TransactionID(&z) {
+				t.Fatal("field boundary collision")
+			}
 		}
 		if TransactionID(&x) != TransactionID(&x) {
 			t.Fatal("nondeterministic")

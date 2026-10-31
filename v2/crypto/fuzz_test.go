@@ -12,7 +12,7 @@ import (
 // brick verifying nodes via crafted range proofs.
 func FuzzVerifyRangeBorromean(f *testing.F) {
 	// Fixed public seed bytes are retained so the initial corpus is reproducible.
-	rawSeed, err := os.ReadFile("testdata/range_v2.json")
+	rawSeed, err := os.ReadFile("testdata/range_v5.json")
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func FuzzVerifyRangeBorromean(f *testing.F) {
 
 // FuzzSchnorrVerify is the matching harness for Schnorr signatures.
 func FuzzSchnorrVerify(f *testing.F) {
-	rawSeed, err := os.ReadFile("testdata/arithmetic_v2.json")
+	rawSeed, err := os.ReadFile("testdata/arithmetic_v5.json")
 	if err != nil {
 		f.Fatal(err)
 	}

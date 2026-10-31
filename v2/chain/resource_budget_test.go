@@ -16,14 +16,8 @@ import (
 
 func maximumResourceBody() *types.Block {
 	b := &types.Block{Header: types.BlockHeader{Height: 1}, Inputs: make([]types.Input, MaxBlockInputs), Outputs: make([]types.Output, MaxBlockOutputs), Kernels: make([]types.Kernel, MaxBlockKernels)}
-	for i := range b.Inputs {
-		b.Inputs[i].LegacyAddr = string(make([]byte, 256))
-		b.Inputs[i].LegacySig = string(make([]byte, 256))
-		b.Inputs[i].LegacyPubKey = string(make([]byte, 88))
-	}
 	for i := range b.Outputs {
 		b.Outputs[i].RangeProof = make([]byte, MaxRangeProofBytes)
-		b.Outputs[i].LegacyAddress = string(make([]byte, 256))
 	}
 	for i := range b.Kernels {
 		b.Kernels[i].ExcessSig = make([]byte, 65)
@@ -48,7 +42,7 @@ func TestResourceMaximumSuffixSynthetic1024(t *testing.T) {
 		}
 		b.Inputs = nil
 		for _, out := range previous {
-			b.Inputs = append(b.Inputs, types.Input{Commit: out.Commit, Features: out.Features, LegacyAddr: out.LegacyAddress, LegacyAmount: out.LegacyAmount, LegacySig: string(make([]byte, 256)), LegacyPubKey: string(make([]byte, 88))})
+			b.Inputs = append(b.Inputs, types.Input{Commit: out.Commit, Features: out.Features})
 		}
 		return b
 	}
@@ -101,7 +95,7 @@ func TestResourceV4ShapeBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const maximumShape = MaxBlockInputs*(192+256+256+88) + MaxBlockOutputs*(128+MaxRangeProofBytes+256) + MaxBlockKernels*(128+65)
+	const maximumShape = MaxBlockInputs*192 + MaxBlockOutputs*(128+MaxRangeProofBytes) + MaxBlockKernels*(128+65)
 	if n != maximumShape || n > MaxBlockBodyBytes {
 		t.Fatalf("maximum shape: %d, want %d", n, maximumShape)
 	}
@@ -110,10 +104,6 @@ func TestResourceV4ShapeBoundaries(t *testing.T) {
 		func(b *types.Block) { b.Outputs = append(b.Outputs, types.Output{}) },
 		func(b *types.Block) { b.Kernels = append(b.Kernels, types.Kernel{}) },
 		func(b *types.Block) { b.Outputs[0].RangeProof = append(b.Outputs[0].RangeProof, 0) },
-		func(b *types.Block) { b.Inputs[0].LegacyAddr += "x" },
-		func(b *types.Block) { b.Inputs[0].LegacySig += "x" },
-		func(b *types.Block) { b.Inputs[0].LegacyPubKey += "x" },
-		func(b *types.Block) { b.Outputs[0].LegacyAddress += "x" },
 		func(b *types.Block) { b.Kernels[0].ExcessSig = append(b.Kernels[0].ExcessSig, 0) },
 	} {
 		bad := cloneBlock(b)
@@ -195,27 +185,23 @@ func TestResourceBadgerUndoPredecodeGuard(t *testing.T) {
 	}
 }
 
-func TestResourceStoresRejectOversizedUndoAtomic(t *testing.T) {
+// With no height-0 exemption an output whose proof exceeds the consensus bound
+// can never enter the store, so no oversized undo record can be produced. Both
+// backends must refuse it atomically at the first write.
+func TestResourceStoresRejectOversizedOutputAtomic(t *testing.T) {
 	disk, err := OpenBadger(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer disk.Close()
 	g := easyGenesisBlock(t)
-	// Raw trusted-genesis envelope is broader than accepted native outputs.
-	// This deliberately invalid consensus allocation tests Store error parity.
 	g.Outputs = []types.Output{{Commit: storePoint(t, 71), RangeProof: make([]byte, MaxRangeProofBytes+1)}}
-	b := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Inputs: []types.Input{{Commit: g.Outputs[0].Commit}}}
 	for _, s := range []Store{newMemStore(), disk} {
-		if err := s.WriteBlock(g); err != nil {
-			t.Fatal(err)
+		if err := s.WriteBlock(g); err == nil {
+			t.Fatal("oversized output accepted")
 		}
-		if err := s.WriteBlock(b); !errors.Is(err, ErrResourceBudget) {
-			t.Fatalf("oversized undo accepted: %v", err)
-		}
-		tip, _ := s.Tip()
-		if tip != g.Header || !s.HasUTXO(g.Outputs[0].Commit) {
-			t.Fatal("rejected undo changed canonical state")
+		if _, ok := s.Tip(); ok || s.HasUTXO(g.Outputs[0].Commit) || s.HasOutput(g.Outputs[0].Commit) {
+			t.Fatal("rejected write changed canonical state")
 		}
 	}
 }
@@ -278,19 +264,25 @@ func TestResourceV4NativePaymentFullPipeline(t *testing.T) {
 			amount += types.BlockReward(source.Header.Height)
 			inputs[i] = types.Input{Features: types.OutputFeaturesCoinbase, Commit: source.Outputs[0].Commit}
 		}
-		a, err := wallet.NewPlainOutput(int64((amount - fee) / 2))
+		third := (amount - fee) / 3
+		a, err := wallet.NewPlainOutput(int64(third))
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, err := wallet.NewPlainOutput(int64(amount - fee - (amount-fee)/2))
+		b, err := wallet.NewPlainOutput(int64(third))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(a.Output.RangeProof) != MaxRangeProofBytes || len(b.Output.RangeProof) != MaxRangeProofBytes {
+		d, err := wallet.NewPlainOutput(int64(amount - fee - 2*third))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(a.Output.RangeProof) != MaxRangeProofBytes || len(b.Output.RangeProof) != MaxRangeProofBytes || len(d.Output.RangeProof) != MaxRangeProofBytes {
 			t.Fatal("proof encoding bound drift")
 		}
 		x.Add(x, new(big.Int).SetBytes(a.Blinding[:]))
 		x.Add(x, new(big.Int).SetBytes(b.Blinding[:]))
+		x.Add(x, new(big.Int).SetBytes(d.Blinding[:]))
 		x.Mod(x, v2crypto.Curve().Params().N)
 		scalar := x.FillBytes(make([]byte, 32))
 		excess, err := v2crypto.PublicFromScalar(scalar)
@@ -298,18 +290,12 @@ func TestResourceV4NativePaymentFullPipeline(t *testing.T) {
 			t.Fatal(err)
 		}
 		k := types.Kernel{Fee: fee, Excess: excess}
-		id := types.KernelID(&k)
-		k.ExcessSig, err = v2crypto.SchnorrSign(scalar, id[:])
+		k.ExcessSig, err = v2crypto.SchnorrSign(scalar, types.KernelSigningMessage(0, &k))
 		if err != nil {
 			t.Fatal(err)
 		}
 		tip, _ := c.Tip()
-		block := &types.Block{Header: easyHeader(types.HeaderID(&tip), tip.Height+1), Inputs: inputs, Outputs: []types.Output{a.Output, b.Output}, Kernels: []types.Kernel{k}}
-		dev, err := ExpectedDevFundCommit(&block.Header, fee)
-		if err != nil {
-			t.Fatal(err)
-		}
-		block.Outputs = append(block.Outputs, types.Output{Features: types.OutputFeaturesDevFund, Commit: dev})
+		block := &types.Block{Header: easyHeader(types.HeaderID(&tip), tip.Height+1), Inputs: inputs, Outputs: []types.Output{a.Output, b.Output, d.Output}, Kernels: []types.Kernel{k}}
 		sealFixture(block)
 		if len(block.Outputs) != MaxBlockOutputs {
 			t.Fatal("expected all output slots")

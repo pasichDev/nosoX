@@ -1,8 +1,6 @@
 package chain
 
 import (
-	"crypto/sha256"
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
 	"path/filepath"
 	"testing"
 
@@ -117,25 +115,24 @@ func TestUTXODeltaThroughBadger(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	// Genesis with a single legacy output for address "Nfoo".
-	blind := sha256.Sum256([]byte("Nfoo"))
-	commit, err := v2crypto.PedersenCommit(1234, blind[:])
-	if err != nil {
-		t.Fatal(err)
-	}
 	genesis := mineEasy(types.Hash{}, 0)
-	genesis.Outputs = []types.Output{{
-		Features:      types.OutputFeaturesLegacy,
-		Commit:        commit,
-		LegacyAddress: "Nfoo",
-		LegacyAmount:  1234,
-	}}
-	types.SetBlockRoots(genesis)
 	if err := c.LoadOrInit(dir, genesis); err != nil {
 		t.Fatal(err)
 	}
-	bal, ok := c.LookupLegacyBalance("Nfoo")
-	if !ok || bal != 1234 {
-		t.Fatalf("legacy balance lookup: ok=%v bal=%d", ok, bal)
+	// Genesis is empty: nothing is spendable before the first mined block.
+	if c.store.HasUTXO(storePoint(t, 1)) {
+		t.Fatal("empty genesis produced a UTXO")
+	}
+	b := mineEasy(types.HeaderID(&genesis.Header), 1)
+	if err := c.AddBlock(b); err != nil {
+		t.Fatal(err)
+	}
+	cb := b.Outputs[0]
+	got, ok := c.store.UTXOByCommit(cb.Commit)
+	if !ok || got.Features != types.OutputFeaturesCoinbase || got.Commit != cb.Commit {
+		t.Fatalf("coinbase output missing from UTXO set: ok=%v out=%+v", ok, got)
+	}
+	if !c.store.HasOutput(cb.Commit) {
+		t.Fatal("coinbase output missing from historical index")
 	}
 }

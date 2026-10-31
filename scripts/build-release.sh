@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Build a reproducible Noso v2 release.
+# Build a reproducible NosoX release.
 #
 # Produces:
 #   release/<version>/nosoxd-<os>-<arch>
 #   release/<version>/nosox-cli-<os>-<arch>
-#   release/<version>/nosocli-<os>-<arch>
-#   release/<version>/nosod-<os>-<arch>
 #   release/<version>/SHA256SUMS
 #   release/<version>/SHA256SUMS.minisig   (optional, if LAUNCHER_MINISIGN_KEY is set)
 #
@@ -45,7 +43,7 @@ mkdir -p "$OUT"
 cd "$ROOT"
 ARTIFACTS=()
 
-BINS=(nosoxd nosox-cli nosocli nosod)
+BINS=(nosoxd nosox-cli)
 
 for plat in "${PLATFORMS[@]}"; do
   os="${plat%/*}"

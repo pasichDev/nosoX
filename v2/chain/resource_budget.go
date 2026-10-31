@@ -7,9 +7,9 @@ import (
 	"github.com/pasichDev/noso-go/v2/types"
 )
 
-// Version 4 consensus limits. Every legal native suffix of MaxReorgBlocks fits
-// the aggregate body budget; this is not a smaller, node-local fork policy.
-// Trusted genesis retains its original allocation envelope separately.
+// Consensus limits. Every legal suffix of MaxReorgBlocks fits the aggregate
+// body budget; this is not a smaller, node-local fork policy. Genesis is empty
+// and has no separate envelope.
 const (
 	MaxBlockInputs     = types.MaxBlockInputs
 	MaxBlockOutputs    = types.MaxBlockOutputs
@@ -18,7 +18,7 @@ const (
 	MaxRangeProofBytes = types.MaxRangeProofBytes
 	MaxReorgBlocks     = types.MaxReorgBlocks
 	MaxReorgBodyBytes  = types.MaxReorgBodyBytes
-	MaxUndoRecordBytes = MaxBlockInputs * (128 + MaxRangeProofBytes + 256)
+	MaxUndoRecordBytes = MaxBlockInputs * (128 + MaxRangeProofBytes)
 	// Gob includes field/type descriptors and length prefixes. This loose bound
 	// exceeds twice the complete charge plus 4 KiB for the fixed output schema.
 	MaxEncodedUndoBytes = 2*MaxUndoRecordBytes + 4096
@@ -33,25 +33,16 @@ func BodyResourceBytes(b *types.Block) (uint64, error) {
 	if b == nil {
 		return 0, errors.New("chain: nil block")
 	}
-	inputs, outputs, kernels, body, proof := MaxBlockInputs, MaxBlockOutputs, MaxBlockKernels, MaxBlockBodyBytes, MaxRangeProofBytes
-	if b.Header.Height == 0 {
-		inputs, outputs, kernels, body, proof = 10000, 10000, 10000, 8<<20, 65536
-	}
-	if len(b.Inputs) > inputs || len(b.Outputs) > outputs || len(b.Kernels) > kernels {
+	if len(b.Inputs) > MaxBlockInputs || len(b.Outputs) > MaxBlockOutputs || len(b.Kernels) > MaxBlockKernels {
 		return 0, errors.New("chain: body item limit")
 	}
 	var size uint64
-	for _, in := range b.Inputs {
-		if len(in.LegacyAddr) > 256 || len(in.LegacySig) > 256 || len(in.LegacyPubKey) > 88 {
-			return 0, errors.New("chain: input field limit")
-		}
-		size += uint64(192 + len(in.LegacyAddr) + len(in.LegacySig) + len(in.LegacyPubKey))
-	}
+	size += uint64(len(b.Inputs)) * 192
 	for _, out := range b.Outputs {
-		if len(out.RangeProof) > proof || len(out.LegacyAddress) > 256 {
+		if len(out.RangeProof) > MaxRangeProofBytes {
 			return 0, errors.New("chain: output field limit")
 		}
-		size += uint64(128 + len(out.RangeProof) + len(out.LegacyAddress))
+		size += uint64(128 + len(out.RangeProof))
 	}
 	for _, kernel := range b.Kernels {
 		if len(kernel.ExcessSig) > 65 {
@@ -59,14 +50,14 @@ func BodyResourceBytes(b *types.Block) (uint64, error) {
 		}
 		size += uint64(128 + len(kernel.ExcessSig))
 	}
-	if size > uint64(body) {
+	if size > uint64(MaxBlockBodyBytes) {
 		return 0, errors.New("chain: body size limit")
 	}
 	return size, nil
 }
 
 // CheckReorgResourceBudget runs before rollback allocations. It accepts every
-// suffix allowed by the v4 per-block and depth limits, including the maximum.
+// suffix allowed by the per-block and depth limits, including the maximum.
 func CheckReorgResourceBudget(incoming []*types.Block) error {
 	if len(incoming) > MaxReorgBlocks {
 		return ErrTooDeep
@@ -94,10 +85,10 @@ func undoResourceBytes(outputs []types.Output) (uint64, error) {
 	}
 	var size uint64
 	for _, out := range outputs {
-		if len(out.RangeProof) > MaxRangeProofBytes || len(out.LegacyAddress) > 256 {
+		if len(out.RangeProof) > MaxRangeProofBytes {
 			return 0, fmt.Errorf("%w: undo output fields", ErrResourceBudget)
 		}
-		size += uint64(128 + len(out.RangeProof) + len(out.LegacyAddress))
+		size += uint64(128 + len(out.RangeProof))
 	}
 	return size, nil
 }

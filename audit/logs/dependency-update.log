@@ -1,4 +1,0 @@
-go: downloading github.com/quic-go/quic-go v0.59.1
-go: downloading github.com/pion/dtls/v3 v3.1.4
-go: downloading github.com/quic-go/webtransport-go v0.11.1
-go: github.com/quic-go/webtransport-go@v0.11.1 requires github.com/quic-go/quic-go@v0.60.0, not github.com/quic-go/quic-go@v0.59.1

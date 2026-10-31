@@ -22,14 +22,14 @@ func TestBadgerFenceAbandonedStageDifferentRetry(t *testing.T) {
 				t.Fatal(err)
 			}
 			g := easyGenesisBlock(t)
-			old := types.Output{Commit: storePoint(t, 7), Features: types.OutputFeaturesLegacy, LegacyAddress: "old", LegacyAmount: 7, RangeProof: []byte{7}}
+			old := types.Output{Commit: storePoint(t, 7), Features: types.OutputFeaturesPlain, RangeProof: []byte{7}}
 			g.Outputs = []types.Output{old}
 			types.SetBlockRoots(g)
 			if err := s.WriteBlock(g); err != nil {
 				t.Fatal(err)
 			}
 			baseline := rawBadgerEntries(t, s)
-			abandoned := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Inputs: []types.Input{{Commit: old.Commit, Features: old.Features, LegacyAddr: old.LegacyAddress, LegacyAmount: 7}}, Outputs: []types.Output{{Commit: storePoint(t, 8), RangeProof: []byte{8}}}}
+			abandoned := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Inputs: []types.Input{{Commit: old.Commit, Features: old.Features}}, Outputs: []types.Output{{Commit: storePoint(t, 8), RangeProof: []byte{8}}}}
 			injected := errors.New("stage interruption")
 			s.fault = func(at string) error {
 				if at == phase {
@@ -112,7 +112,7 @@ func TestBadgerFencePreviousVersionBodyRejectedAtomic(t *testing.T) {
 	if err := s.WriteBlock(g); err != nil {
 		t.Fatal(err)
 	}
-	// The former v3 maximum is now rejected by both backends before staging.
+	// The former maximum body is now rejected by both backends before staging.
 	// Proof bytes are synthetic; cryptographic validity is tested elsewhere.
 	b := &types.Block{Header: easyHeader(types.HeaderID(&g.Header), 1), Outputs: make([]types.Output, 10000)}
 	remaining := 8 << 20
@@ -125,7 +125,7 @@ func TestBadgerFencePreviousVersionBodyRejectedAtomic(t *testing.T) {
 		remaining -= 128 + n
 	}
 	if err := bodyBounds(b); err == nil {
-		t.Fatal("v3 maximum body accepted by v4")
+		t.Fatal("oversized maximum body accepted")
 	}
 	types.SetBlockRoots(b)
 	memory := newMemStore()

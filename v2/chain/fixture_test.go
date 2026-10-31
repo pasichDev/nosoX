@@ -10,9 +10,17 @@ import (
 )
 
 // sealFixture explicitly constructs version-2 subsidy authorization and full
-// body commitments. Legacy development fixture bytes are not accepted implicitly.
-func sealFixture(b *types.Block) {
-	if reward := types.BlockReward(b.Header.Height); reward > 0 {
+// body commitments. Unsealed fixture bytes are not accepted implicitly.
+func sealFixture(b *types.Block) { sealFixtureClaim(b, 0) }
+
+// sealFixtureClaim is sealFixture with a miner that claims reward + fees + delta.
+// delta != 0 builds the block a dishonest miner would try to publish.
+func sealFixtureClaim(b *types.Block, delta int64) {
+	amount, err := CoinbaseAmount(b)
+	if err != nil {
+		panic(err)
+	}
+	if reward := amount + delta; reward > 0 {
 		seed := append([]byte("chain test coinbase"), b.Header.PrevHash[:]...)
 		seed = binary.BigEndian.AppendUint64(seed, b.Header.Height)
 		blind := sha256.Sum256(seed)
@@ -21,7 +29,7 @@ func sealFixture(b *types.Block) {
 			panic(err)
 		}
 		rec := wallet.CoinbaseRecord{Height: b.Header.Height, Amount: reward, Blinding: blind, Commit: commit}
-		sig, err := wallet.SignCoinbase(rec)
+		sig, err := wallet.SignCoinbase(b.Header.NetworkMagic, rec)
 		if err != nil {
 			panic(err)
 		}

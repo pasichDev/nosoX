@@ -1,36 +1,57 @@
-# Contributing to unsafe NosoX research
+# Contributing
 
-Read [release blockers](audit/RELEASE_READINESS.md) and
-[consensus invariants](audit/CONSENSUS_INVARIANTS.md) before editing validation.
-This is not production money infrastructure or an independently audited project.
+Read [audit/CONSENSUS_INVARIANTS.md](audit/CONSENSUS_INVARIANTS.md) before
+changing validation. This project is experimental and has not been
+independently audited.
 
-Use Go 1.27.3 (`go.mod` is authoritative). Clone `pasichDev/noso-go` into a private
-working checkout, use a feature branch, then run:
+## Setup
+
+Use the Go version in `go.mod`. Fork the repository, create a branch, and
+run before opening a pull request:
 
 ```bash
-go fmt ./...
-go build ./...
+gofmt -l .            # must print nothing
+go mod tidy -diff     # must print nothing
 go vet ./...
+go build ./...
 go test ./... -count=1
 go test -race ./... -count=1
+golangci-lint run     # configuration in .golangci.yml
 ```
 
-Bound package parallelism with `-p 2` on constrained machines. Cache paths must
-be writable. See [TEST_REPORT.md](audit/TEST_REPORT.md) for fuzz commands, scanner
-versions, local integration and measured limits. Never connect test fixtures or
-adversarial tests to public hosts or cryptocurrency networks.
+Use `-p 2` on small machines. Fuzz targets run with `go test -fuzz`; see the
+list in [audit/EXTERNAL_CRYPTO_REVIEW_PACKET.md](audit/EXTERNAL_CRYPTO_REVIEW_PACKET.md).
 
-For validation changes, add a negative test through AddBlock/ValidateTransaction/
-ReorgTo, a valid control and state-unchanged assertion on both stores. Preserve
-historical fixture bytes and explicitly document rejection/compatibility changes.
-Tests must exercise intended rejection reasons; earlier guard failures can hide
-missing checks. Never weaken monetary or ownership rules to satisfy a fixture.
+## Rules for consensus changes
 
-Do not assert constant-time behavior from an API name: current secret operations
-have unresolved timing risks. Any new cryptographic dependency or construction
-requires justification and independent review. Do not change subsidy, GVT value,
-premine or fee destination as an incidental fix.
+- Add a negative test that goes through `AddBlock`, `ValidateTransaction` or
+  `ReorgTo`, a valid control case, and an assertion that state is unchanged on
+  both stores.
+- Check that the test fails for the intended reason. An earlier guard can hide a
+  missing check.
+- Do not weaken a monetary rule to make a fixture pass.
+- A consensus change needs a protocol version bump and an entry in the
+  changelog.
+- Do not change the subsidy, the coinbase amount (subsidy plus fees) or the fee rule as a side
+  effect of another change.
+- Do not describe code as constant time unless a reviewer has confirmed it.
+- A new cryptographic dependency or construction needs a written justification
+  and independent review.
 
-Use focused imperative commits. Do not publish vulnerabilities or secrets in
-public issues; use an established private maintainer contact. No public disclosure
-SLA, private GitHub reporting facility or bounty is assumed. MIT license applies.
+## Pull requests
+
+Keep commits focused and use imperative messages. Update the documentation in
+`docs/` when behavior changes. The documentation site builds in strict mode:
+
+```bash
+pip install -r docs/requirements.txt
+mkdocs build --strict -d /tmp/site
+```
+
+## Reporting vulnerabilities
+
+Do not use public issues. See [SECURITY.md](SECURITY.md).
+
+## License
+
+Contributions are licensed under the MIT license in [LICENSE](LICENSE).

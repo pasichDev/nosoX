@@ -14,6 +14,8 @@ func newSvcWithToken(tok string) *Service {
 func post(t *testing.T, h http.Handler, body string, withToken string) *http.Response {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/", bytes.NewBufferString(body))
+	req.Host = "127.0.0.1:7780"
+	req.RemoteAddr = "127.0.0.1:50000"
 	req.Header.Set("Content-Type", "application/json")
 	if withToken != "" {
 		req.Header.Set("Authorization", "Bearer "+withToken)

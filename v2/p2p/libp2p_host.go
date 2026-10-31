@@ -1,38 +1,45 @@
 // libp2p_host.go — production P2P layer.
 //
-// Replaces the previous JSON-over-TCP gossip with go-libp2p +
-// gossipsub. Benefits:
+// go-libp2p + gossipsub:
 //
-//   - NAT traversal (AutoRelay, hole punching).
-//   - mDNS auto-discovery on the local network.
+//   - NAT help: opt-in port mapping (UPnP / NAT-PMP), hole punching and the
+//     circuit-relay client. There is no AutoRelay: `-relay` addresses are only
+//     added to the peerstore and dialed once, no relay reservation is made.
+//   - No local-network (mDNS) discovery and no DHT. Peers come from the seed
+//     lists, `-seed`/`-relay`, and peers we met before (see bootstrap.go).
 //   - Encrypted transports (noise) and stream multiplexing (yamux).
-//   - Topic-based gossip via gossipsub (used by ETH, Filecoin, etc).
+//   - Topic-based gossip via gossipsub with peer scoring, peer exchange off and
+//     a subscription allowlist.
 //
-// Two versioned JSON topics:
+// Two binary topics, namespaced by network magic (%08x):
 //
-//	"noso-v2/blocks"  — new full blocks (JSON-encoded *types.Block)
-//	"noso-v2/txs"     — new transactions (JSON-encoded *types.Transaction)
+//	"NosoX/%08x/blocks/v6" — new full blocks (wire.go)
+//	"NosoX/%08x/txs/v6"    — new transactions (wire.go)
 //
-// Inbound payloads are validated by the local Chain / Mempool before
-// being re-published; libp2p-gossipsub handles dedup via message IDs.
+// The gossip message ID is the SHA-256 of topic and payload, so a replay under a
+// new sequence number is a duplicate and is never validated again. Block and
+// transaction validators have separate concurrency and per-peer budgets, so a
+// transaction flood cannot starve block validation.
 package p2p
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
+	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	pb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/pasichDev/noso-go/v2/chain"
@@ -42,8 +49,26 @@ import (
 
 // Topic names. Namespaced by network magic so testnet and mainnet
 // peers don't accidentally cross-talk.
-func topicBlocks(magic uint32) string { return fmt.Sprintf("noso-v2/%08x/blocks-v2", magic) }
-func topicTxs(magic uint32) string    { return fmt.Sprintf("noso-v2/%08x/txs-v2", magic) }
+func topicBlocks(magic uint32) string { return fmt.Sprintf("NosoX/%08x/blocks/v6", magic) }
+func topicTxs(magic uint32) string    { return fmt.Sprintf("NosoX/%08x/txs/v6", magic) }
+
+// Options configures a node.
+type Options struct {
+	// ListenAddrs are multiaddr strings; empty means TCP and QUIC on :7781.
+	ListenAddrs []string
+	Magic       uint32
+	// DataDir holds the persistent node identity (p2p_identity.key, 0600) and the
+	// address book (peers.json). Empty means an ephemeral identity and no book.
+	DataDir string
+	// NATPortMap asks the router for a port mapping via UPnP / NAT-PMP.
+	// Off by default: listening on 0.0.0.0 must not open a router port unasked.
+	NATPortMap bool
+	// MaintenanceInterval is the reconnect period (default 30 s).
+	MaintenanceInterval time.Duration
+	// TargetPeers is the connection count below which seeds and known peers are
+	// redialed (default 8).
+	TargetPeers int
+}
 
 // Libp2pNode is the production replacement for `Node`.
 type Libp2pNode struct {
@@ -51,114 +76,226 @@ type Libp2pNode struct {
 	chain   *chain.Chain
 	mempool *mempool.Pool
 	logger  func(string, ...any)
+	opts    Options
 
-	host      host.Host
-	ps        *pubsub.PubSub
-	tBlk      *pubsub.Topic
-	tTx       *pubsub.Topic
-	sBlk      *pubsub.Subscription
-	sTx       *pubsub.Subscription
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	taskMu    sync.Mutex
-	stopping  bool
-	fetcher   reorgFetcher
-	syncSlots chan struct{}
-	limiter   *rateLimiter
+	host     host.Host
+	ps       *pubsub.PubSub
+	tBlk     *pubsub.Topic
+	tTx      *pubsub.Topic
+	sBlk     *pubsub.Subscription
+	sTx      *pubsub.Subscription
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	taskMu   sync.Mutex
+	stopping bool
+
+	book     *peerBook
+	sync     *syncServer
+	hello    *rateLimiter
+	blkLimit *rateLimiter
+	txLimit  *rateLimiter
+	syncKick chan struct{}
+
+	badMu   sync.Mutex
+	badTips map[badKey]time.Time
+	skew    skewTracker
+
+	netMu sync.Mutex
+	seeds []peer.AddrInfo
+	known map[peer.ID]*knownPeer
+	// seedState backs off configured seeds that fail to answer.
+	seedState map[peer.ID]*seedBackoff
+	dirty     bool
 }
 
-// NewLibp2p creates a libp2p host listening on the given multi-address
-// strings (e.g. []string{"/ip4/0.0.0.0/tcp/7781"}). Pass an empty slice
-// to use the libp2p defaults.
+// NewLibp2p creates a libp2p host with an ephemeral identity listening on the
+// given multi-address strings (e.g. []string{"/ip4/0.0.0.0/tcp/7781"}). Pass an
+// empty slice to use the libp2p defaults. Daemons should use
+// NewLibp2pWithOptions so the identity survives restarts.
 func NewLibp2p(listenAddrs []string, magic uint32, c *chain.Chain, p *mempool.Pool) (*Libp2pNode, error) {
-	opts := []libp2p.Option{
+	return NewLibp2pWithOptions(Options{ListenAddrs: listenAddrs, Magic: magic}, c, p)
+}
+
+// NewLibp2pWithOptions creates a node from opts.
+func NewLibp2pWithOptions(opts Options, c *chain.Chain, p *mempool.Pool) (*Libp2pNode, error) {
+	if opts.MaintenanceInterval <= 0 {
+		opts.MaintenanceInterval = 30 * time.Second
+	}
+	if opts.TargetPeers <= 0 {
+		opts.TargetPeers = 8
+	}
+	book := newPeerBook()
+	g := &gater{book: book}
+	cm, err := connmgr.NewConnManager(32, 96, connmgr.WithGracePeriod(time.Minute))
+	if err != nil {
+		return nil, err
+	}
+	hopts := []libp2p.Option{
 		libp2p.DefaultTransports,
 		libp2p.DefaultSecurity,
 		libp2p.DefaultMuxers,
-		libp2p.NATPortMap(),
 		libp2p.EnableHolePunching(),
 		libp2p.EnableRelay(),
+		libp2p.ConnectionManager(cm),
+		libp2p.ConnectionGater(g),
 	}
-	if len(listenAddrs) > 0 {
-		opts = append(opts, libp2p.ListenAddrStrings(listenAddrs...))
+	if opts.NATPortMap {
+		hopts = append(hopts, libp2p.NATPortMap())
+	}
+	if opts.DataDir != "" {
+		key, err := LoadOrCreateIdentity(opts.DataDir)
+		if err != nil {
+			return nil, err
+		}
+		hopts = append(hopts, libp2p.Identity(key))
+	}
+	if len(opts.ListenAddrs) > 0 {
+		hopts = append(hopts, libp2p.ListenAddrStrings(opts.ListenAddrs...))
 	} else {
-		// Listen on both TCP and QUIC-v1 (UDP). QUIC — the transport
-		// Google (HTTP/3) and other latency-sensitive apps use — recovers
-		// from packet loss per-stream and survives NAT rebinds, so it stays
-		// usable on poor/mobile networks where TCP stalls. DefaultTransports
-		// already registers the QUIC dialer; we just need to listen on it.
-		opts = append(opts, libp2p.ListenAddrStrings(
+		// Listen on both TCP and QUIC-v1 (UDP). QUIC recovers from packet loss
+		// per stream and survives NAT rebinds.
+		hopts = append(hopts, libp2p.ListenAddrStrings(
 			"/ip4/0.0.0.0/tcp/7781",
 			"/ip4/0.0.0.0/udp/7781/quic-v1",
 		))
 	}
-	h, err := libp2p.New(opts...)
+	h, err := libp2p.New(hopts...)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	ps, err := pubsub.NewGossipSub(ctx, h, pubsub.WithMaxMessageSize(maxWireBytes), pubsub.WithValidateQueueSize(8), pubsub.WithValidateThrottle(2), pubsub.WithValidateWorkers(2), pubsub.WithPeerOutboundQueueSize(8))
+	var self atomic.Pointer[Libp2pNode]
+	inspect := func(from peer.ID, rpc *pubsub.RPC) error {
+		if n := self.Load(); n != nil {
+			n.inspectRPC(from, rpc)
+		}
+		return nil
+	}
+	ps, err := pubsub.NewGossipSub(ctx, h, gossipOptions(opts.Magic, book, inspect)...)
 	if err != nil {
 		cancel()
 		_ = h.Close()
 		return nil, err
 	}
-	return &Libp2pNode{
-		magic:     magic,
+	n := &Libp2pNode{
+		magic:     opts.Magic,
 		chain:     c,
 		mempool:   p,
+		opts:      opts,
 		host:      h,
 		ps:        ps,
-		limiter:   newRateLimiter(),
-		syncSlots: make(chan struct{}, 8),
+		book:      book,
+		sync:      newSyncServer(),
+		hello:     newRateLimiterRate(1, 6),
+		blkLimit:  newRateLimiterRate(1, 8),
+		txLimit:   newRateLimiterRate(20, 60),
+		syncKick:  make(chan struct{}, 1),
+		badTips:   map[badKey]time.Time{},
+		known:     map[peer.ID]*knownPeer{},
+		seedState: map[peer.ID]*seedBackoff{},
 		ctx:       ctx,
 		cancel:    cancel,
 		logger:    func(string, ...any) {},
-	}, nil
+	}
+	g.net = h.Network()
+	g.maxInbound = maxInboundTotal
+	n.loadKnown()
+	self.Store(n)
+	return n, nil
+}
+
+// contentMsgID makes the gossip message ID a hash of topic and payload.
+func contentMsgID(m *pb.Message) string {
+	h := sha256.New()
+	h.Write([]byte(m.GetTopic()))
+	h.Write([]byte{0})
+	h.Write(m.Data)
+	return string(h.Sum(nil))
+}
+
+func gossipOptions(magic uint32, book *peerBook, inspect func(peer.ID, *pubsub.RPC) error) []pubsub.Option {
+	tb, tt := topicBlocks(magic), topicTxs(magic)
+	topicScore := func() *pubsub.TopicScoreParams {
+		return &pubsub.TopicScoreParams{
+			SkipAtomicValidation:           true,
+			TopicWeight:                    1,
+			TimeInMeshQuantum:              time.Second, // weight 0: only avoids a zero divisor
+			FirstMessageDeliveriesWeight:   1,
+			FirstMessageDeliveriesDecay:    0.9,
+			FirstMessageDeliveriesCap:      10,
+			InvalidMessageDeliveriesWeight: -20,
+			InvalidMessageDeliveriesDecay:  0.9,
+		}
+	}
+	_, lo4, _ := net.ParseCIDR("127.0.0.0/8")
+	_, lo6, _ := net.ParseCIDR("::1/128")
+	params := &pubsub.PeerScoreParams{
+		SkipAtomicValidation: true,
+		Topics:               map[string]*pubsub.TopicScoreParams{tb: topicScore(), tt: topicScore()},
+		TopicScoreCap:        50,
+		AppSpecificScore:     book.appScore,
+		AppSpecificWeight:    1,
+		// Many nodes behind one address are a Sybil signal; loopback is exempt
+		// so local test networks work.
+		IPColocationFactorWeight:    -10,
+		IPColocationFactorThreshold: 4,
+		IPColocationFactorWhitelist: []*net.IPNet{lo4, lo6},
+		BehaviourPenaltyWeight:      -5,
+		BehaviourPenaltyThreshold:   3,
+		BehaviourPenaltyDecay:       0.9,
+		DecayInterval:               10 * time.Second,
+		DecayToZero:                 0.01,
+		RetainScore:                 10 * time.Minute,
+	}
+	thresholds := &pubsub.PeerScoreThresholds{
+		GossipThreshold:   -100,
+		PublishThreshold:  -200,
+		GraylistThreshold: -400,
+		// Peer exchange is off; the threshold is unreachable as well, so even a
+		// forged PRUNE with peer records cannot steer our dials.
+		AcceptPXThreshold:           1e9,
+		OpportunisticGraftThreshold: 5,
+	}
+	return []pubsub.Option{
+		pubsub.WithMaxMessageSize(maxGossipRPCBytes),
+		pubsub.WithMessageIdFn(contentMsgID),
+		pubsub.WithSeenMessagesTTL(30 * time.Minute),
+		// Queue and global throttle are generous; the per-topic validator
+		// concurrency below is the real budget, so tx floods only exhaust the tx
+		// validator and never the block one.
+		pubsub.WithValidateQueueSize(256),
+		pubsub.WithValidateThrottle(64),
+		pubsub.WithValidateWorkers(4),
+		pubsub.WithPeerOutboundQueueSize(16),
+		pubsub.WithPeerExchange(false),
+		pubsub.WithPeerScore(params, thresholds),
+		// Per-peer message budgets are enforced here, BEFORE pubsub marks a message
+		// as seen: a validator that returns Ignore for an over-budget copy would
+		// burn the content-hash ID, and every honest copy arriving afterwards would
+		// be dropped as a duplicate (go-libp2p-pubsub validation.go: markSeen runs
+		// before the user validators).
+		pubsub.WithAppSpecificRpcInspector(inspect),
+		pubsub.WithSubscriptionFilter(pubsub.WrapLimitSubscriptionFilter(pubsub.NewAllowlistSubscriptionFilter(tb, tt), 8)),
+	}
 }
 
 // SetLogger overrides the default no-op logger.
 func (n *Libp2pNode) SetLogger(fn func(string, ...any)) { n.logger = fn }
 
+// ID returns the node's libp2p peer ID.
+func (n *Libp2pNode) ID() peer.ID { return n.host.ID() }
+
 // Start joins the topics and begins listening for inbound messages.
 func (n *Libp2pNode) Start() error {
-	if err := n.ps.RegisterTopicValidator(topicTxs(n.magic), func(_ context.Context, _ peer.ID, msg *pubsub.Message) bool {
-		tx, err := decodeTxMsg(msg.Data)
-		if err != nil {
-			return false
-		}
-		_, err = n.mempool.Add(tx)
-		if errors.Is(err, mempool.ErrDuplicate) {
-			return n.mempool.Validate(tx) == nil
-		}
-		return err == nil
+	if err := n.ps.RegisterTopicValidator(topicTxs(n.magic), func(_ context.Context, pid peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+		return n.validateTxMsg(pid, msg.Data)
 	}, pubsub.WithValidatorConcurrency(2)); err != nil {
 		return err
 	}
 	if err := n.ps.RegisterTopicValidator(topicBlocks(n.magic), func(_ context.Context, pid peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
-		b, err := decodeBlockMsg(msg.Data)
-		if err != nil {
-			return pubsub.ValidationReject
-		}
-		// An already accepted header binds every body field through consensus roots.
-		// This also allows producers to publish blocks after locally applying them.
-		if stored, ok := n.chain.HeaderByHeight(b.Header.Height); ok && types.HeaderID(&stored) == types.HeaderID(&b.Header) {
-			o, k := types.BlockRoots(b)
-			if o == b.Header.OutputRoot && k == b.Header.KernelRoot {
-				return pubsub.ValidationAccept
-			}
-			return pubsub.ValidationReject
-		}
-		if err = n.chain.ValidateBlock(b); err != nil {
-			if errors.Is(err, chain.ErrStale) {
-				n.tryReorgFetch(pid, b)
-				return pubsub.ValidationIgnore
-			}
-			return pubsub.ValidationReject
-		}
-		return pubsub.ValidationAccept
-	}, pubsub.WithValidatorConcurrency(2)); err != nil {
+		return n.validateBlockMsg(pid, msg.Data)
+	}, pubsub.WithValidatorConcurrency(4)); err != nil {
 		return err
 	}
 	tBlk, err := n.ps.Join(topicBlocks(n.magic))
@@ -183,10 +320,121 @@ func (n *Libp2pNode) Start() error {
 	n.installSyncHandler()
 	n.installHelloHandler()
 
-	n.wg.Add(2)
+	n.wg.Add(4)
 	go n.consumeBlocks()
 	go n.consumeTxs()
+	go n.syncLoop()
+	go n.maintenanceLoop()
 	return nil
+}
+
+// inspectRPC enforces the per-peer block and transaction budgets on an incoming
+// RPC before pubsub sees its messages. Over-budget messages are trimmed from the
+// RPC, so a throttled copy never burns the message's content ID. It runs on
+// pubsub's single processing goroutine: no decoding, no chain access.
+func (n *Libp2pNode) inspectRPC(from peer.ID, rpc *pubsub.RPC) {
+	if from == n.host.ID() || len(rpc.Publish) == 0 {
+		return
+	}
+	tb, tt := topicBlocks(n.magic), topicTxs(n.magic)
+	kept := rpc.Publish[:0]
+	dropped := false
+	for _, m := range rpc.Publish {
+		switch m.GetTopic() {
+		case tb:
+			if !n.blkLimit.allow(from) {
+				dropped = true
+				continue
+			}
+		case tt:
+			if !n.txLimit.allow(from) {
+				continue
+			}
+		}
+		kept = append(kept, m)
+	}
+	rpc.Publish = kept
+	if dropped {
+		// The block we refused may be one we need: ask the sender what it has, so
+		// sync fetches it directly instead of waiting for a gossip copy.
+		n.noteFork(from)
+	}
+}
+
+// validateBlockMsg is the pre-forward validator for the blocks topic.
+func (n *Libp2pNode) validateBlockMsg(pid peer.ID, data []byte) pubsub.ValidationResult {
+	b, err := decodeBlockMsg(data)
+	if err != nil {
+		n.penalize(pid, penaltyGarbage, "undecodable block")
+		return pubsub.ValidationReject
+	}
+	if pid == n.host.ID() {
+		return pubsub.ValidationAccept // we applied it before publishing
+	}
+	// A block we already hold is a replay: never forward it again.
+	if stored, ok := n.chain.HeaderByHeight(b.Header.Height); ok {
+		if types.HeaderID(&stored) != types.HeaderID(&b.Header) {
+			n.noteFork(pid) // a competing block at a known height: ask for its work
+		}
+		return pubsub.ValidationIgnore
+	}
+	if err = n.chain.ValidateBlock(b); err != nil {
+		switch {
+		case errors.Is(err, chain.ErrStale):
+			n.noteFork(pid)
+			return pubsub.ValidationIgnore
+		case errors.Is(err, chain.ErrFutureTimestamp):
+			// Our clock or theirs: never a reason to score the relay.
+			n.noteFutureBlock(pid, b.Header.Timestamp)
+			return pubsub.ValidationIgnore
+		case chain.IsPeerFault(err):
+			n.penalize(pid, penaltyBadGossip, "invalid block")
+			return pubsub.ValidationReject
+		}
+		return pubsub.ValidationIgnore // resource limits, disk errors: ours, not theirs
+	}
+	return pubsub.ValidationAccept
+}
+
+// validateTxMsg is the pre-forward validator for the txs topic. A transaction
+// we already pool is ignored without revalidation.
+func (n *Libp2pNode) validateTxMsg(pid peer.ID, data []byte) pubsub.ValidationResult {
+	tx, err := decodeTxMsg(data)
+	if err != nil {
+		n.penalize(pid, penaltyGarbage, "undecodable transaction")
+		return pubsub.ValidationReject
+	}
+	local := pid == n.host.ID()
+	_, err = n.mempool.Add(tx)
+	res, penalize := classifyTxAdmission(err, local)
+	if penalize {
+		n.penalize(pid, penaltyBadTx, "invalid transaction")
+	}
+	return res
+}
+
+// classifyTxAdmission maps the mempool's answer for a gossiped transaction to a
+// validation result and whether the sender is penalized. Only a transaction that
+// is invalid whatever the chain state (bad shape, signature, range proof,
+// balance) is rejected and penalized. Everything that depends on what THIS node
+// currently holds is ignored without a penalty: an input we do not know yet, an
+// immature coinbase, a lock height, an output or kernel we already have, relay
+// policy (fee floor, full pool, conflict), and local transient conditions. A
+// node that is behind must not punish the honest relays that are ahead of it.
+func classifyTxAdmission(err error, local bool) (res pubsub.ValidationResult, penalize bool) {
+	switch {
+	case err == nil:
+		return pubsub.ValidationAccept, false
+	case errors.Is(err, mempool.ErrDuplicate):
+		if local {
+			return pubsub.ValidationAccept, false // let our own re-broadcast through
+		}
+		return pubsub.ValidationIgnore, false
+	case mempool.IsPolicy(err), errors.Is(err, mempool.ErrUnavailable), errors.Is(err, chain.ErrResourceBudget),
+		errors.Is(err, chain.ErrTxState), errors.Is(err, chain.ErrDoubleSpend), errors.Is(err, chain.ErrStorage):
+		return pubsub.ValidationIgnore, false
+	}
+	return pubsub.ValidationReject, true
 }
 
 // Shutdown stops the goroutines and closes the libp2p host.
@@ -208,6 +456,7 @@ func (n *Libp2pNode) Shutdown() error {
 		_ = n.tTx.Close()
 	}
 	n.wg.Wait()
+	n.saveKnown()
 	return n.host.Close()
 }
 
@@ -222,7 +471,8 @@ func (n *Libp2pNode) Addrs() []string {
 	return out
 }
 
-// ConnectSeed dials a /ip4/host/tcp/port/p2p/peerid multi-address.
+// ConnectSeed dials a /ip4/host/tcp/port/p2p/peerid multi-address and protects
+// the connection from being trimmed.
 func (n *Libp2pNode) ConnectSeed(ctx context.Context, addr string) error {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
@@ -236,9 +486,19 @@ func (n *Libp2pNode) ConnectSeed(ctx context.Context, addr string) error {
 	if err != nil {
 		return fmt.Errorf("p2p: addrInfo %s: %w", addr, err)
 	}
+	return n.dial(ctx, *info, true)
+}
+
+func (n *Libp2pNode) dial(ctx context.Context, info peer.AddrInfo, protect bool) error {
 	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return n.host.Connect(connectCtx, *info)
+	if err := n.host.Connect(connectCtx, info); err != nil {
+		return err
+	}
+	if protect {
+		n.host.ConnManager().Protect(info.ID, "seed")
+	}
+	return nil
 }
 
 // BroadcastBlock publishes b to the blocks topic.
@@ -265,7 +525,7 @@ func (n *Libp2pNode) BroadcastTx(tx *types.Transaction) error {
 	return n.tTx.Publish(n.ctx, raw)
 }
 
-// consumeBlocks pulls block messages from the subscription and applies
+// consumeBlocks pulls accepted block messages from the subscription and applies
 // them to the local chain.
 func (n *Libp2pNode) consumeBlocks() {
 	defer n.wg.Done()
@@ -274,7 +534,6 @@ func (n *Libp2pNode) consumeBlocks() {
 		if err != nil {
 			return
 		}
-		// Skip our own messages.
 		if msg.ReceivedFrom == n.host.ID() {
 			continue
 		}
@@ -285,7 +544,7 @@ func (n *Libp2pNode) consumeBlocks() {
 		}
 		if err := n.chain.AddBlock(b); err != nil {
 			if errors.Is(err, chain.ErrStale) {
-				n.tryReorgFetch(msg.ReceivedFrom, b)
+				n.noteFork(msg.ReceivedFrom)
 				continue
 			}
 			n.logger("p2p: reject block: %v", err)
@@ -293,23 +552,13 @@ func (n *Libp2pNode) consumeBlocks() {
 	}
 }
 
-// consumeTxs similarly drains the txs topic.
+// consumeTxs drains the txs topic; admission happened in the topic validator.
 func (n *Libp2pNode) consumeTxs() {
 	defer n.wg.Done()
 	for {
-		msg, err := n.sTx.Next(n.ctx)
-		if err != nil {
+		if _, err := n.sTx.Next(n.ctx); err != nil {
 			return
 		}
-		if msg.ReceivedFrom == n.host.ID() {
-			continue
-		}
-		tx, err := decodeTxMsg(msg.Data)
-		if err != nil {
-			n.logger("p2p: tx decode: %v", err)
-			continue
-		}
-		_ = tx // admission occurred in the pre-forward topic validator
 	}
 }
 
@@ -318,64 +567,9 @@ func (n *Libp2pNode) PeerCount() int {
 	return len(n.host.Network().Peers())
 }
 
-// EnsurePeerScore is a future hook for slashing misbehaving peers; for
-// now we just check the network state to keep the symbol exported.
+// ConnectionState reports the connectedness of p.
 func (n *Libp2pNode) ConnectionState(p peer.ID) network.Connectedness {
 	return n.host.Network().Connectedness(p)
-}
-
-// ---- encoding helpers --------------------------------------------------
-
-const maxWireBytes = 16 << 20
-
-// JSON decoding allocates only as bytes are consumed; unlike gob it cannot
-// request huge slice allocations from attacker supplied element counts.
-func decodeWire(raw []byte, dst any, max int) error {
-	if len(raw) == 0 || len(raw) > max {
-		return errors.New("p2p: payload size")
-	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return err
-	}
-	var extra any
-	if dec.Decode(&extra) != io.EOF {
-		return errors.New("p2p: trailing payload")
-	}
-	return nil
-}
-func encodeBlockMsg(b *types.Block) ([]byte, error) { return json.Marshal(b) }
-func decodeBlockMsg(raw []byte) (*types.Block, error) {
-	var b types.Block
-	if err := decodeWire(raw, &b, maxWireBytes); err != nil {
-		return nil, err
-	}
-	if err := checkBody(b.Inputs, b.Outputs, b.Kernels); err != nil {
-		return nil, err
-	}
-	return &b, nil
-}
-func encodeTxMsg(tx *types.Transaction) ([]byte, error) { return json.Marshal(tx) }
-func decodeTxMsg(raw []byte) (*types.Transaction, error) {
-	var tx types.Transaction
-	if err := decodeWire(raw, &tx, maxWireBytes); err != nil {
-		return nil, err
-	}
-	if err := checkBody(tx.Inputs, tx.Outputs, tx.Kernels); err != nil {
-		return nil, err
-	}
-	return &tx, nil
-}
-
-// checkBody applies the native consensus envelope before admission. Genesis
-// allocations are trusted local inputs, never imported through gossip/sync.
-func checkBody(in []types.Input, out []types.Output, k []types.Kernel) error {
-	_, err := chain.BodyResourceBytes(&types.Block{Header: types.BlockHeader{Height: 1}, Inputs: in, Outputs: out, Kernels: k})
-	if err != nil {
-		return fmt.Errorf("p2p: native body envelope: %w", err)
-	}
-	return nil
 }
 
 // launch serializes task registration with Shutdown so accepted background work

@@ -69,22 +69,28 @@ func (c *Chain) streamingVerifyHistory(source *BadgerStore, genesis *types.Block
 		return err
 	}
 	check := &Chain{store: scratch, checkpoints: c.checkpoints, now: c.now}
+	total := blockWork(g.Header.Difficulty)
 	for h := uint64(1); h <= tipHeight; h++ {
 		b, err := replayBlockAt(snapshot, h)
 		if err != nil {
 			return err
 		}
-		if err := check.validate(b); err != nil {
+		if err := check.validate(b, false); err != nil {
 			return fmt.Errorf("chain: invalid persisted block %d: %w", h, err)
 		}
 		if err := scratch.WriteBlock(b); err != nil {
 			return err
 		}
+		total.Add(total, blockWork(b.Header.Difficulty))
 		if h == tipHeight {
 			break
 		} // avoid uint64 wrap on a corrupt maximum tip
 	}
-	return scratch.view(func(expected *badger.Txn) error { return compareReplayState(snapshot, expected) })
+	if err := scratch.view(func(expected *badger.Txn) error { return compareReplayState(snapshot, expected) }); err != nil {
+		return err
+	}
+	c.seedWorkLocked(total)
+	return nil
 }
 
 func replayBlockAt(txn *badger.Txn, height uint64) (*types.Block, error) {
@@ -93,9 +99,6 @@ func replayBlockAt(txn *badger.Txn, height uint64) (*types.Block, error) {
 		return nil, fmt.Errorf("chain: persisted block %d: %w", height, err)
 	}
 	maxBody := int64(MaxBlockBodyBytes)
-	if height == 0 {
-		maxBody = 8 << 20
-	}
 	// Fixed gob schema overhead and representation lengths fit comfortably
 	// within twice the consensus field charge plus a descriptor allowance.
 	if item.ValueSize() > 2*maxBody+4096 {

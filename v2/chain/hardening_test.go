@@ -108,22 +108,27 @@ func TestSecurityBlockAuthorizationMutations(t *testing.T) {
 		"wrong subsidy value": func(b *types.Block) {
 			blind := sha256.Sum256([]byte("inflation"))
 			commit, _ := v2crypto.PedersenCommit(types.BlockReward(1)+1, blind[:])
-			sig, _ := wallet.SignCoinbase(wallet.CoinbaseRecord{Height: 1, Amount: types.BlockReward(1) + 1, Blinding: blind, Commit: commit})
+			sig, _ := wallet.SignCoinbase(b.Header.NetworkMagic, wallet.CoinbaseRecord{Height: 1, Amount: types.BlockReward(1) + 1, Blinding: blind, Commit: commit})
 			b.Outputs[0].Commit = commit
 			b.Kernels[0].Excess = commit
 			b.Kernels[0].ExcessSig = sig
 		},
-		"legacy mint": func(b *types.Block) {
-			b.Outputs[0].Features = types.OutputFeaturesLegacy
-			b.Outputs[0].LegacyAddress = "stolen"
-			b.Outputs[0].LegacyAmount = 123
-		},
-		"unknown feature": func(b *types.Block) { b.Outputs[0].Features = 255 },
-		"offset":          func(b *types.Block) { b.Header.TotalKernelOffset[0] = 1 },
-		"version":         func(b *types.Block) { b.Header.Version-- },
-		"foreign network": func(b *types.Block) { b.Header.NetworkMagic++ },
-		"coinbase fee":    func(b *types.Block) { b.Kernels[0].Fee = 1 },
-		"coinbase lock":   func(b *types.Block) { b.Kernels[0].LockHeight = 0 },
+		"unknown feature":        func(b *types.Block) { b.Outputs[0].Features = 255 },
+		"unknown output feature": func(b *types.Block) { b.Outputs[0].Features = 3 },
+		"unknown kernel feature": func(b *types.Block) { b.Kernels[0].Features = 2 },
+		"stale v4 version":       func(b *types.Block) { b.Header.Version = 4 },
+		"offset":                 func(b *types.Block) { b.Header.TotalKernelOffset[0] = 1 },
+		"version":                func(b *types.Block) { b.Header.Version-- },
+		"foreign network":        func(b *types.Block) { b.Header.NetworkMagic++ },
+		"coinbase fee":           func(b *types.Block) { b.Kernels[0].Fee = 1 },
+		"coinbase lock":          func(b *types.Block) { b.Kernels[0].LockHeight = 0 },
+	}
+	// Cases whose signed coinbase stays valid after the mutation (the signature
+	// binds neither the kernel's fee nor its lock height) must be stopped by the
+	// structural rule they name, not by an unrelated signature failure.
+	reaches := map[string]string{
+		"coinbase fee":  "chain: invalid coinbase kernel",
+		"coinbase lock": "chain: invalid coinbase kernel",
 	}
 	backendChains(t, func(t *testing.T, c *Chain, dir string) {
 		g := easyGenesisBlock(t)
@@ -136,8 +141,12 @@ func TestSecurityBlockAuthorizationMutations(t *testing.T) {
 				b := mineEasy(types.HeaderID(&g.Header), 1)
 				mutate(b)
 				types.SetBlockRoots(b)
-				if err := c.AddBlock(b); err == nil {
+				err := c.AddBlock(b)
+				if err == nil {
 					t.Fatal("malicious block accepted")
+				}
+				if want, ok := reaches[name]; ok && !strings.Contains(err.Error(), want) {
+					t.Fatalf("rejected by the wrong rule: %v, want %q", err, want)
 				}
 				if !reflect.DeepEqual(before, snapshot(t, c)) {
 					t.Fatal("failure changed chain")
@@ -239,6 +248,12 @@ func TestSecurityReorgCommitFailureUnchanged(t *testing.T) {
 
 func fixtureSpend(t *testing.T, source *types.Block, height uint64) (*types.Block, [32]byte) {
 	t.Helper()
+	return fixtureSpendFor(t, source, height, 0)
+}
+
+// fixtureSpendFor signs the kernel for the given network magic.
+func fixtureSpendFor(t *testing.T, source *types.Block, height uint64, magic uint32) (*types.Block, [32]byte) {
+	t.Helper()
 	seed := append([]byte("chain test coinbase"), source.Header.PrevHash[:]...)
 	seed = binary.BigEndian.AppendUint64(seed, source.Header.Height)
 	blind := sha256.Sum256(seed)
@@ -254,8 +269,7 @@ func fixtureSpend(t *testing.T, source *types.Block, height uint64) (*types.Bloc
 		t.Fatal(err)
 	}
 	k := types.Kernel{Excess: excess}
-	id := types.KernelID(&k)
-	k.ExcessSig, err = v2crypto.SchnorrSign(scalar, id[:])
+	k.ExcessSig, err = v2crypto.SchnorrSign(scalar, types.KernelSigningMessage(magic, &k))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,11 +316,11 @@ func TestSecurityNativeAuthorizationMaturityAndUndo(t *testing.T) {
 		if err := c.AddBlock(proofMutation); err == nil || !strings.Contains(err.Error(), "roots mismatch") {
 			t.Fatalf("uncommitted body mutation wrong rejection: %v", err)
 		}
-		legacyProof := cloneBlock(spend)
-		legacyProof.Outputs[0].RangeProof = append([]byte{1}, make([]byte, 32)...)
-		types.SetBlockRoots(legacyProof)
-		if err := c.AddBlock(legacyProof); !errors.Is(err, ErrBadOutput) {
-			t.Fatalf("fake v1 proof wrong rejection: %v", err)
+		shortProof := cloneBlock(spend)
+		shortProof.Outputs[0].RangeProof = append([]byte{1}, make([]byte, 32)...)
+		types.SetBlockRoots(shortProof)
+		if err := c.AddBlock(shortProof); !errors.Is(err, ErrBadOutput) {
+			t.Fatalf("fake short proof wrong rejection: %v", err)
 		}
 		types.SetBlockRoots(proofMutation)
 		if err := c.AddBlock(proofMutation); !errors.Is(err, ErrBadOutput) {
@@ -348,8 +362,7 @@ func TestSecurityNativeAuthorizationMaturityAndUndo(t *testing.T) {
 			t.Fatal(err)
 		}
 		kernel := types.Kernel{Excess: excess}
-		id := types.KernelID(&kernel)
-		kernel.ExcessSig, err = v2crypto.SchnorrSign(scalar, id[:])
+		kernel.ExcessSig, err = v2crypto.SchnorrSign(scalar, types.KernelSigningMessage(0, &kernel))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -366,12 +379,12 @@ func TestSecurityNativeAuthorizationMaturityAndUndo(t *testing.T) {
 		if priorErr != nil {
 			t.Fatalf("historical recreation did not reproduce former admission: %v", priorErr)
 		}
-		if err := c.ValidateTransaction(cycleTx); err == nil || !strings.Contains(err.Error(), "existing output") {
+		if err := c.ValidateTransaction(cycleTx); err == nil || !strings.Contains(err.Error(), "output already exists") {
 			t.Fatalf("mempool historical recreation wrong rejection: %v", err)
 		}
 		sealFixture(cycle)
 		beforeCycle := snapshot(t, c)
-		if err := c.AddBlock(cycle); err == nil || !strings.Contains(err.Error(), "existing output") {
+		if err := c.AddBlock(cycle); err == nil || !strings.Contains(err.Error(), "output already exists") {
 			t.Fatalf("historical recreation wrong rejection: %v", err)
 		}
 		// A prior signed excess can also make a valid zero-value output. The
@@ -394,7 +407,7 @@ func TestSecurityNativeAuthorizationMaturityAndUndo(t *testing.T) {
 		if priorErr != nil {
 			t.Fatalf("kernel replay did not reproduce former admission: %v", priorErr)
 		}
-		if err := c.AddBlock(replay); err == nil || !strings.Contains(err.Error(), "duplicate kernel") {
+		if err := c.AddBlock(replay); err == nil || !strings.Contains(err.Error(), "kernel already included") {
 			t.Fatalf("historical kernel wrong rejection: %v", err)
 		}
 		if !reflect.DeepEqual(beforeCycle, snapshot(t, c)) {
@@ -498,30 +511,100 @@ func TestSecurityBackendParityAndNestedSlices(t *testing.T) {
 	}
 }
 
-func TestSecurityLegacyClaimFailsClosed(t *testing.T) {
+// Genesis is empty: any input, output or kernel makes it untrusted, and a
+// rejected genesis must leave the store uninitialised.
+func TestSecurityGenesisMustBeEmpty(t *testing.T) {
+	mutations := map[string]func(*types.Block){
+		"output": func(g *types.Block) {
+			g.Outputs = []types.Output{{Features: types.OutputFeaturesPlain, Commit: storePoint(t, 1), RangeProof: []byte{1}}}
+		},
+		"coinbase output": func(g *types.Block) {
+			g.Outputs = []types.Output{{Features: types.OutputFeaturesCoinbase, Commit: storePoint(t, 1)}}
+		},
+		"input": func(g *types.Block) { g.Inputs = []types.Input{{Commit: storePoint(t, 1)}} },
+		"kernel": func(g *types.Block) {
+			g.Kernels = []types.Kernel{{Features: types.KernelFeaturesPlain, Excess: storePoint(t, 2), ExcessSig: make([]byte, 65)}}
+		},
+		"output and kernel": func(g *types.Block) {
+			g.Outputs = []types.Output{{Features: types.OutputFeaturesPlain, Commit: storePoint(t, 1), RangeProof: []byte{1}}}
+			g.Kernels = []types.Kernel{{Excess: storePoint(t, 2)}}
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			backendChains(t, func(t *testing.T, c *Chain, dir string) {
+				g := easyGenesisBlock(t)
+				mutate(g)
+				types.SetBlockRoots(g)
+				if err := c.LoadOrInit(dir, g); err == nil {
+					t.Fatal("non-empty genesis accepted")
+				}
+				if _, ok := c.Tip(); ok {
+					t.Fatal("rejected genesis left a tip")
+				}
+				// The same store must still accept the honest empty genesis.
+				if err := c.LoadOrInit(dir, easyGenesisBlock(t)); err != nil {
+					t.Fatalf("empty genesis after rejection: %v", err)
+				}
+			})
+		})
+	}
+}
+
+// Unknown feature discriminants and stale block versions are rejected by the
+// real validator, with the specific consensus reason, on both backends and on
+// the mempool (transaction) path.
+func TestSecurityUnknownFeaturesAndStaleVersionRejected(t *testing.T) {
 	backendChains(t, func(t *testing.T, c *Chain, dir string) {
-		blind := sha256.Sum256([]byte("NosoX legacy blind Nlegacy"))
-		commit, err := v2crypto.PedersenCommit(1234, blind[:])
-		if err != nil {
-			t.Fatal(err)
-		}
 		g := easyGenesisBlock(t)
-		g.Outputs = []types.Output{{Features: types.OutputFeaturesLegacy, Commit: commit, LegacyAddress: "Nlegacy", LegacyAmount: 1234}}
-		types.SetBlockRoots(g)
 		if err := c.LoadOrInit(dir, g); err != nil {
 			t.Fatal(err)
 		}
 		before := snapshot(t, c)
-		// A public legacy blinding and an attacker-made native proof are insufficient
-		// ownership evidence, even when the attacker supplies arbitrary legacy auth.
-		b := mineEasy(types.HeaderID(&g.Header), 1)
-		b.Inputs = []types.Input{{Features: types.OutputFeaturesLegacy, Commit: commit, LegacyAddr: "Nlegacy", LegacyAmount: 1234, LegacySig: "attacker"}}
-		types.SetBlockRoots(b)
-		if err := c.AddBlock(b); err == nil || !strings.Contains(err.Error(), "ownership procedure") {
-			t.Fatalf("legacy theft wrong rejection: %v", err)
+		cases := []struct {
+			name   string
+			mutate func(*types.Block)
+			check  func(error) bool
+		}{
+			{"output feature 3", func(b *types.Block) { b.Outputs[0].Features = 3 }, func(err error) bool { return errors.Is(err, ErrBadOutput) }},
+			{"kernel feature 2", func(b *types.Block) { b.Kernels[0].Features = 2 }, func(err error) bool { return err != nil && strings.Contains(err.Error(), "unsupported kernel feature") }},
+			{"block version 4", func(b *types.Block) { b.Header.Version = 4 }, func(err error) bool { return err != nil && strings.Contains(err.Error(), "unsupported version") }},
 		}
-		if !reflect.DeepEqual(before, snapshot(t, c)) {
-			t.Fatal("legacy rejection changed state")
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				b := mineEasy(types.HeaderID(&g.Header), 1)
+				tc.mutate(b)
+				types.SetBlockRoots(b)
+				if err := c.AddBlock(b); !tc.check(err) {
+					t.Fatalf("wrong rejection: %v", err)
+				}
+				if !reflect.DeepEqual(before, snapshot(t, c)) {
+					t.Fatal("rejection changed state")
+				}
+			})
+		}
+	})
+}
+
+// A real, otherwise valid mature spend whose output carries an unknown feature
+// must be rejected on the transaction (mempool) path as well as in a block.
+func TestSecurityUnknownOutputFeatureRejectedForSpend(t *testing.T) {
+	backendChains(t, func(t *testing.T, c *Chain, dir string) {
+		g := easyGenesisBlock(t)
+		if err := c.LoadOrInit(dir, g); err != nil {
+			t.Fatal(err)
+		}
+		source := appendBlocks(t, c, 1, 1)[0]
+		appendBlocks(t, c, 2, 60)
+		spend, _ := fixtureSpend(t, source, 61)
+		tx := &types.Transaction{Inputs: spend.Inputs, Outputs: spend.Outputs, Kernels: spend.Kernels}
+		if err := c.ValidateTransaction(tx); err != nil {
+			t.Fatalf("control spend rejected: %v", err)
+		}
+		tx.Outputs = []types.Output{spend.Outputs[0]}
+		tx.Outputs[0].Features = 3
+		if err := c.ValidateTransaction(tx); !errors.Is(err, ErrBadOutput) {
+			t.Fatalf("wrong rejection: %v", err)
 		}
 	})
 }
@@ -654,7 +737,7 @@ func TestSecurityFutureTimestampCannotFreezeChain(t *testing.T) {
 		fixedNow := baseTime + 1000
 		c.now = func() time.Time { return time.Unix(fixedNow, 0) }
 		before := snapshot(t, c)
-		for _, timestamp := range []int64{fixedNow + 7201, math.MaxInt64} {
+		for _, timestamp := range []int64{fixedNow + types.MaxFutureDriftSeconds + 1, math.MaxInt64} {
 			b := mineEasy(types.HeaderID(&g.Header), 1)
 			b.Header.Timestamp = timestamp
 			err := c.AddBlock(b)
@@ -666,7 +749,7 @@ func TestSecurityFutureTimestampCannotFreezeChain(t *testing.T) {
 			}
 		}
 		b := mineEasy(types.HeaderID(&g.Header), 1)
-		b.Header.Timestamp = fixedNow + 7200
+		b.Header.Timestamp = fixedNow + types.MaxFutureDriftSeconds
 		if err := c.AddBlock(b); err != nil {
 			t.Fatalf("permitted drift boundary rejected: %v", err)
 		}
@@ -706,7 +789,7 @@ func scheduledCandidate(t *testing.T, height uint64, amount int64, coinbase bool
 		if err != nil {
 			t.Fatal(err)
 		}
-		sig, err := wallet.SignCoinbase(wallet.CoinbaseRecord{Height: height, Amount: amount, Blinding: blind, Commit: commit})
+		sig, err := wallet.SignCoinbase(b.Header.NetworkMagic, wallet.CoinbaseRecord{Height: height, Amount: amount, Blinding: blind, Commit: commit})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -732,7 +815,7 @@ func TestSecuritySyntheticScheduleEdgesThroughAddBlock(t *testing.T) {
 			c, s, b = scheduledCandidate(t, height, reward+1, true)
 			before := s.tip
 			err := c.AddBlock(b)
-			if err == nil || (!strings.Contains(err.Error(), "subsidy authorization") && !strings.Contains(err.Error(), "issuance ended")) {
+			if err == nil || (!strings.Contains(err.Error(), "coinbase")) {
 				t.Fatalf("wrong subsidy rejection: %v", err)
 			}
 			if s.writes != 0 || s.tip != before {
@@ -748,8 +831,7 @@ func TestSecuritySyntheticScheduleEdgesThroughAddBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := types.Kernel{Excess: excess, Fee: math.MaxUint64}
-	id := types.KernelID(&k)
-	k.ExcessSig, err = v2crypto.SchnorrSign(scalar, id[:])
+	k.ExcessSig, err = v2crypto.SchnorrSign(scalar, types.KernelSigningMessage(0, &k))
 	if err != nil {
 		t.Fatal(err)
 	}

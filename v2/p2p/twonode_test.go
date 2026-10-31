@@ -21,10 +21,11 @@ import (
 // helper: trivial-PoW genesis used by these scenarios.
 func easyGenesis() *types.Block {
 	hdr := types.BlockHeader{
-		Version:    types.BlockVersion,
-		Height:     0,
-		Timestamp:  time.Now().Unix() - 600,
-		Difficulty: 1,
+		Version:      types.BlockVersion,
+		NetworkMagic: types.NetworkMagicTestnet,
+		Height:       0,
+		Timestamp:    time.Now().Unix() - 600,
+		Difficulty:   1,
 	}
 	for n := uint64(0); n < 32; n++ {
 		hdr.Nonce = n
@@ -39,20 +40,25 @@ func easyGenesis() *types.Block {
 
 func mineEasyBlock(parent types.Hash, height uint64) *types.Block {
 	hdr := types.BlockHeader{
-		Version:    types.BlockVersion,
-		Height:     height,
-		Timestamp:  time.Now().Unix() - 300 + int64(height),
-		PrevHash:   parent,
-		Difficulty: 1,
+		Version:      types.BlockVersion,
+		NetworkMagic: types.NetworkMagicTestnet,
+		Height:       height,
+		Timestamp:    time.Now().Unix() - 300 + int64(height),
+		PrevHash:     parent,
+		Difficulty:   1,
 	}
 	var blind [32]byte
 	blind[31] = byte(height + 1)
 	blind[30] = byte(parent[0])
+	if height > 200 { // long test chains: keep coinbase commitments unique across forks
+		blind[29] = byte((height + 1) >> 8)
+		blind[28], blind[27], blind[26] = parent[1], parent[2], parent[3]
+	}
 	commit, err := v2crypto.PedersenCommit(types.BlockReward(height), blind[:])
 	if err != nil {
 		panic(err)
 	}
-	sig, err := wallet.SignCoinbase(wallet.CoinbaseRecord{Height: height, Amount: types.BlockReward(height), Commit: commit, Blinding: blind})
+	sig, err := wallet.SignCoinbase(hdr.NetworkMagic, wallet.CoinbaseRecord{Height: height, Amount: types.BlockReward(height), Commit: commit, Blinding: blind})
 	if err != nil {
 		panic(err)
 	}
@@ -93,7 +99,7 @@ func bringUpNode(t *testing.T, name string, g *types.Block) (*Libp2pNode, *chain
 
 // TestTwoNodeColdSync verifies that a fresh node, once dialed to a peer
 // with a longer chain, requests and applies the missing blocks via the
-// /noso/hello/1 → /noso/sync/1 protocol pair.
+// /NosoX/hello/v5 → /NosoX/sync/v5 protocol pair.
 //
 // This is the central proof that a new node joining the network
 // catches up automatically. Without this, every new operator would
@@ -432,8 +438,10 @@ func TestPreAdmittedNativeTransactionGossips(t *testing.T) {
 		t.Fatal(e)
 	}
 	kernel := types.Kernel{Features: types.KernelFeaturesPlain, Excess: commit}
-	digest := types.KernelID(&kernel)
-	kernel.ExcessSig, e = v2crypto.SchnorrSign(secret[:], digest[:])
+	// Kernel signatures bind the chain's network magic: the test chain's headers
+	// carry NetworkMagicTestnet, the same value the libp2p nodes are given.
+	digest := types.KernelSigningMessage(g.Header.NetworkMagic, &kernel)
+	kernel.ExcessSig, e = v2crypto.SchnorrSign(secret[:], digest)
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -8,7 +8,7 @@ import (
 
 // Store is the persistence backend the Chain delegates to. Two
 // implementations: an in-memory store for tests (memStore) and a
-// BadgerDB store for production (badgerStore). Both must obey identical
+// BadgerDB store for production (BadgerStore). Both must obey identical
 // semantics — write-then-read returns the same bytes — so swapping does
 // not change consensus.
 type Store interface {
@@ -33,11 +33,12 @@ type Store interface {
 	HasUTXO(types.Commitment) bool
 	// HasOutput and HasKernel include spent outputs and all prior kernels.
 	HasOutput(types.Commitment) bool
+	// OutputHeight returns the height of the block that created the output,
+	// whether or not it is still unspent.
+	OutputHeight(types.Commitment) (uint64, bool)
 	HasKernel(types.Hash) bool
 	// UTXOByCommit returns the unspent output for a commitment.
 	UTXOByCommit(types.Commitment) (*types.Output, bool)
-	// UTXOByLegacyAddress returns the legacy output bound to addr.
-	UTXOByLegacyAddress(string) (*types.Output, bool)
 	// WriteBlock appends at TIP+1 after checking parent and cheap delta/index
 	// consistency atomically. It requires prior full Chain consensus validation;
 	// signatures, proofs, economics and PoW are not authorized by Store alone.
