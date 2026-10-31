@@ -3,12 +3,12 @@ package chain
 import (
 	"encoding/binary"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // Store is the persistence backend the Chain delegates to. Two
 // implementations: an in-memory store for tests (memStore) and a
-// BadgerDB store for production (badgerStore). Both must obey identical
+// BadgerDB store for production (BadgerStore). Both must obey identical
 // semantics — write-then-read returns the same bytes — so swapping does
 // not change consensus.
 type Store interface {
@@ -18,18 +18,35 @@ type Store interface {
 	HeightOf(types.Hash) (uint64, bool)
 	// BlockAt fetches the block at the given height. (error if absent.)
 	BlockAt(uint64) (*types.Block, error)
+	// UndoAt returns complete spent outputs for a canonical block, as isolated copies.
+	UndoAt(uint64) ([]types.Output, error)
+	// UndoAtBudget returns only records whose decoded charge fits maxBytes.
+	// Memory checks before cloning; persistent stores must bound encoded record
+	// allocation before decoding, then check the decoded charge before returning.
+	UndoAtBudget(height uint64, maxBytes uint64) ([]types.Output, error)
+	// ReplaceSuffix atomically replaces blocks after ancestor; failure preserves state.
+	// Like WriteBlock it checks raw consistency and requires prior Chain validation.
+	ReplaceSuffix(ancestor uint64, incoming []*types.Block) error
 	// BlockByHash fetches a block by its header hash.
 	BlockByHash(types.Hash) (*types.Block, error)
 	// HasUTXO reports whether the given commitment is currently unspent.
 	HasUTXO(types.Commitment) bool
+	// HasOutput and HasKernel include spent outputs and all prior kernels.
+	HasOutput(types.Commitment) bool
+	// OutputHeight returns the height of the block that created the output,
+	// whether or not it is still unspent.
+	OutputHeight(types.Commitment) (uint64, bool)
+	HasKernel(types.Hash) bool
 	// UTXOByCommit returns the unspent output for a commitment.
 	UTXOByCommit(types.Commitment) (*types.Output, bool)
-	// UTXOByLegacyAddress returns the legacy output bound to addr.
-	UTXOByLegacyAddress(string) (*types.Output, bool)
-	// WriteBlock appends a new block AT TIP+1, applying its UTXO delta.
+	// WriteBlock appends at TIP+1 after checking parent and cheap delta/index
+	// consistency atomically. It requires prior full Chain consensus validation;
+	// signatures, proofs, economics and PoW are not authorized by Store alone.
 	WriteBlock(*types.Block) error
 	// UndoBlock removes the tip block AND undoes its UTXO delta.
 	UndoBlock() error
+	// ReplaceChain atomically replaces the complete canonical state. Failure leaves it unchanged.
+	ReplaceChain([]*types.Block) error
 	// Save flushes any in-flight state to disk.
 	Save() error
 	// Close releases backend resources (file handles, mmap, etc.).

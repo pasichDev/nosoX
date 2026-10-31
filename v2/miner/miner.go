@@ -5,25 +5,30 @@ package miner
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
+	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/noso-project/noso-go/v2/chain"
-	"github.com/noso-project/noso-go/v2/mempool"
-	"github.com/noso-project/noso-go/v2/pow"
-	"github.com/noso-project/noso-go/v2/types"
-	"github.com/noso-project/noso-go/v2/wallet"
+	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/noso-go/v2/mempool"
+	"github.com/pasichDev/noso-go/v2/pow"
+	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/wallet"
 )
+
+// MaxThreads is the most worker goroutines Start accepts (each holds a 64 MiB
+// Argon2 working set).
+const MaxThreads = 16
 
 // Miner produces blocks from mempool + current tip.
 type Miner struct {
 	chain    *chain.Chain
 	pool     *mempool.Pool
 	cbStore  *wallet.CoinbaseStore // where fresh blinds + commits get persisted
-	rewardTo string                // human-readable label stamped into the kernel preimage
+	rewardTo string                // free-form operator label; informational only, in no block, kernel or signature
 
 	// listeners receive a copy of every successfully-applied block. The
 	// daemon registers p2p.BroadcastBlock here so freshly mined blocks
@@ -35,10 +40,51 @@ type Miner struct {
 	mu     sync.Mutex
 	state  State
 	cancel context.CancelFunc
+	done   chan struct{}
 
 	// Counters for stats.
 	hashCount atomic.Uint64
 	startedAt time.Time
+
+	// Operator-visible failure state. The grind loop retries after errors but
+	// never does so silently: each distinct failure is logged and the latest
+	// is reported by Stats (and so by minerstats).
+	logf        func(format string, args ...any)
+	gateMu      sync.Mutex
+	gate        func() bool
+	errMu       sync.Mutex
+	lastErr     string
+	lastErrAt   time.Time
+	lastLogged  string
+	lastLogTime time.Time
+	errCount    uint64
+	blocksFound atomic.Uint64
+}
+
+// SetLogger installs the sink for miner failures. Without one, failures are
+// still counted and reported through Stats.
+func (m *Miner) SetLogger(logf func(format string, args ...any)) {
+	m.errMu.Lock()
+	m.logf = logf
+	m.errMu.Unlock()
+}
+
+// noteError records a failure of the mining loop and logs it, repeating an
+// identical message at most once every 30 seconds.
+func (m *Miner) noteError(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	m.errMu.Lock()
+	m.errCount++
+	m.lastErr, m.lastErrAt = msg, time.Now()
+	logf := m.logf
+	emit := msg != m.lastLogged || time.Since(m.lastLogTime) > 30*time.Second
+	if emit {
+		m.lastLogged, m.lastLogTime = msg, time.Now()
+	}
+	m.errMu.Unlock()
+	if emit && logf != nil {
+		logf("miner: %s", msg)
+	}
 }
 
 // State describes the miner's current activity.
@@ -49,10 +95,8 @@ const (
 	StateMining
 )
 
-// New constructs an unstarted miner. cb may be nil, in which case the
-// miner still mines but does NOT persist its coinbase blinding factors
-// — meaning it cannot later spend its own rewards. Production callers
-// must pass a non-nil CoinbaseStore.
+// New constructs an unstarted miner. A coinbase keystore is required whenever
+// the block's coinbase amount (reward plus selected fees) is positive; candidate construction fails if reward keys cannot persist.
 func New(c *chain.Chain, p *mempool.Pool, cb *wallet.CoinbaseStore) *Miner {
 	return &Miner{chain: c, pool: p, cbStore: cb}
 }
@@ -69,8 +113,11 @@ func (m *Miner) OnNewBlock(fn func(*types.Block)) {
 
 func (m *Miner) emit(b *types.Block) {
 	m.listenersMu.RLock()
-	defer m.listenersMu.RUnlock()
-	for _, fn := range m.listeners {
+	listeners := append([]func(*types.Block){}, m.listeners...)
+	m.listenersMu.RUnlock()
+	// Invoke user callbacks outside the registration lock. A listener may
+	// register another listener, and callbacks must not block future registration.
+	for _, fn := range listeners {
 		fn(b)
 	}
 }
@@ -81,10 +128,20 @@ func (m *Miner) Start(ctx context.Context, threads int, rewardTo string) error {
 	if threads < 1 {
 		threads = 1
 	}
+	if threads > MaxThreads {
+		return errors.New("miner: thread limit exceeded")
+	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.state == StateMining {
-		m.mu.Unlock()
 		return ErrAlreadyMining
+	}
+	if m.done != nil {
+		select {
+		case <-m.done:
+		default:
+			return ErrAlreadyMining
+		}
 	}
 	innerCtx, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
@@ -92,76 +149,174 @@ func (m *Miner) Start(ctx context.Context, threads int, rewardTo string) error {
 	m.rewardTo = rewardTo
 	m.hashCount.Store(0)
 	m.startedAt = time.Now()
-	m.mu.Unlock()
-
-	go m.run(innerCtx, threads)
+	done := make(chan struct{})
+	m.done = done
+	go func() {
+		defer close(done)
+		defer func() {
+			m.mu.Lock()
+			if m.done == done {
+				m.state = StateIdle
+				m.cancel = nil
+			}
+			m.mu.Unlock()
+		}()
+		m.run(innerCtx, threads)
+	}()
 	return nil
 }
 
 // Stop halts mining.
 func (m *Miner) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.cancel != nil {
 		m.cancel()
 	}
-	m.state = StateIdle
+	done := m.done
+	m.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+	m.mu.Lock()
+	if m.done == done {
+		m.state = StateIdle
+	}
+	m.mu.Unlock()
 }
 
 // Stats returns hashes-per-second since Start was last called.
 type Stats struct {
-	State     State
-	Hashes    uint64
-	Elapsed   time.Duration
-	HashesPS  float64
+	State    State
+	Hashes   uint64
+	Elapsed  time.Duration
+	HashesPS float64
+	// BlocksFound counts solved blocks the chain accepted.
+	BlocksFound uint64
+	// Errors counts failures of the mining loop since the process started;
+	// LastError is the latest one (empty if none) and LastErrorAt its time.
+	Errors      uint64
+	LastError   string
+	LastErrorAt time.Time
 }
 
 // Stats returns a snapshot of the current activity.
 func (m *Miner) Stats() Stats {
 	m.mu.Lock()
 	state := m.state
+	startedAt := m.startedAt
 	m.mu.Unlock()
-	elapsed := time.Since(m.startedAt)
+	elapsed := time.Since(startedAt)
 	h := m.hashCount.Load()
 	hps := 0.0
 	if elapsed > 0 {
 		hps = float64(h) / elapsed.Seconds()
 	}
-	return Stats{State: state, Hashes: h, Elapsed: elapsed, HashesPS: hps}
+	m.errMu.Lock()
+	st := Stats{State: state, Hashes: h, Elapsed: elapsed, HashesPS: hps, BlocksFound: m.blocksFound.Load(),
+		Errors: m.errCount, LastError: m.lastErr, LastErrorAt: m.lastErrAt}
+	m.errMu.Unlock()
+	return st
 }
 
 // ErrAlreadyMining is returned when Start is called twice without a
 // Stop in between.
 var ErrAlreadyMining = errors.New("miner: already mining")
 
+// SetSyncGate installs a condition mining must satisfy before EVERY candidate:
+// while it reports false the miner idles instead of building on a tip the
+// network may have left behind. Unlike a one-time wait at startup it also stops
+// a miner whose node falls behind later, and it applies to every way mining can
+// be started (the daemon flag and the RPC). nil removes the gate.
+func (m *Miner) SetSyncGate(gate func() bool) {
+	m.gateMu.Lock()
+	m.gate = gate
+	m.gateMu.Unlock()
+}
+
+// gateOpen reports whether mining may proceed; with no gate it always may.
+func (m *Miner) gateOpen() bool {
+	m.gateMu.Lock()
+	g := m.gate
+	m.gateMu.Unlock()
+	return g == nil || g()
+}
+
 func (m *Miner) run(ctx context.Context, threads int) {
+	warned := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
+		if !m.gateOpen() {
+			if !warned {
+				m.noteError("mining paused: node is not synced with its peers")
+				warned = true
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+			continue
+		}
+		warned = false
 		// Build a fresh candidate from the current tip.
 		candidate, err := m.makeCandidate()
 		if err != nil {
-			time.Sleep(2 * time.Second)
+			// A missing tip or reward store may persist; avoid a busy loop,
+			// but let parent cancellation stop the miner immediately.
+			m.noteError("cannot build candidate: %v", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
 			continue
 		}
 		// Race threads to find a nonce.
 		found := m.grindBlock(ctx, candidate, threads)
 		if found == nil {
-			continue // ctx cancelled or new tip arrived
+			continue // context cancelled
+		}
+		// The reward key must be durable BEFORE the block can exist anywhere:
+		// a block that lands without its key would lose the reward.
+		if candidate.reward != nil {
+			if err := m.cbStore.Persist(*candidate.reward); err != nil {
+				m.noteError("cannot persist reward key for height %d, block withheld: %v", found.Header.Height, err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(2 * time.Second):
+				}
+				continue
+			}
 		}
 		// Attempt to add. On error (e.g. someone else got it first), loop.
 		if err := m.chain.AddBlock(found); err != nil {
+			if !errors.Is(err, chain.ErrStale) {
+				m.noteError("solved block at height %d rejected: %v", found.Header.Height, err)
+			}
 			continue
 		}
-		// Clear confirmed transactions from the mempool.
-		for _, tx := range candidate.kernelsByTx {
-			m.pool.Remove(tx)
-		}
+		m.blocksFound.Add(1)
+		m.confirmMined(candidate.txs)
 		// Notify listeners — the daemon broadcasts via libp2p here.
 		m.emit(found)
+	}
+}
+
+// confirmMined clears the transactions of a block this node just mined from the
+// pool. It goes through Pool.Confirmed, never Pool.Remove: the pool's own chain
+// subscription may not have applied the block yet, and a removal that wins the
+// race would leave nothing to stash, so a reorg of this very block could only
+// re-admit the transactions as a lumped aggregate. Confirmed stashes the
+// transaction itself, so it also holds for one that already left the pool while
+// the block was being ground (expiry, eviction, replacement).
+func (m *Miner) confirmMined(txs []*types.Transaction) {
+	for _, tx := range txs {
+		m.pool.Confirmed(tx)
 	}
 }
 
@@ -169,7 +324,9 @@ func (m *Miner) run(ctx context.Context, threads int) {
 type candidate struct {
 	block       *types.Block
 	kernelsByTx [][32]byte // mempool IDs of the included transactions
+	txs         []*types.Transaction
 	difficulty  uint64
+	reward      *wallet.CoinbaseRecord // held in memory until the block is solved
 }
 
 func (m *Miner) makeCandidate() (*candidate, error) {
@@ -177,55 +334,48 @@ func (m *Miner) makeCandidate() (*candidate, error) {
 	if !ok {
 		return nil, errors.New("miner: no tip (genesis missing?)")
 	}
+	if tip.Height == math.MaxUint64 || tip.Timestamp == math.MaxInt64 {
+		return nil, errors.New("miner: exhausted height or timestamp")
+	}
 	height := tip.Height + 1
+	timestamp := time.Now().Unix()
+	if timestamp <= tip.Timestamp {
+		timestamp = tip.Timestamp + 1
+	}
 	difficulty := nextDifficulty(m.chain, tip)
 	prevHash := types.HeaderID(&tip)
 
 	// Bundle mempool txs.
-	txs := m.pool.Snapshot()
-	var (
-		inputs   []types.Input
-		outputs  []types.Output
-		kernels  []types.Kernel
-		kernelTx [][32]byte
-	)
-	for _, tx := range txs {
-		inputs = append(inputs, tx.Inputs...)
-		outputs = append(outputs, tx.Outputs...)
-		kernels = append(kernels, tx.Kernels...)
-		kernelTx = append(kernelTx, mempool.TxID(tx))
-	}
-	// Coinbase output: a real Pedersen commitment bound to a fresh
-	// random blinding factor persisted to the miner's coinbase store.
-	// The kernel's excess equals the commit, signed with Schnorr by the
-	// blinding scalar so other nodes can verify the miner owned the key.
+	sel := selectTransactions(height, m.pool.Snapshot(), m.chain.ValidateTransaction, m.pool.Remove)
+	inputs, outputs, kernels := sel.inputs, sel.outputs, sel.kernels
+	kernelTx, selectedFees := sel.ids, sel.fees
+	// Coinbase, built after transaction selection because it pays the subsidy
+	// plus every selected fee: a real Pedersen commitment to reward+F bound to a
+	// fresh random blinding factor persisted to the miner's coinbase store
+	// (the record holds the full amount). The kernel's excess equals the commit,
+	// signed with Schnorr by the blinding scalar so other nodes can verify the
+	// miner owned the key. Required when reward+F > 0, forbidden when it is 0.
 	reward := types.BlockReward(height)
-	if reward > 0 {
-		var (
-			commit [33]byte
-			sig    []byte
-			cbRec  wallet.CoinbaseRecord
-		)
-		if m.cbStore != nil {
-			r, err := m.cbStore.Allocate(height, reward)
-			if err == nil {
-				cbRec = r
-				commit = r.Commit
-				if s, err := wallet.SignCoinbase(r); err == nil {
-					sig = s
-				}
-			} else {
-				commit = coinbaseCommit(m.rewardTo, height) // fallback (cannot be spent)
-			}
-		} else {
-			commit = coinbaseCommit(m.rewardTo, height)
+	if selectedFees > math.MaxInt64 || int64(selectedFees) > math.MaxInt64-reward {
+		return nil, errors.New("miner: coinbase amount overflow")
+	}
+	amount := reward + int64(selectedFees)
+	var rewardRec *wallet.CoinbaseRecord
+	if amount > 0 {
+		if m.cbStore == nil {
+			return nil, errors.New("miner: reward keystore required")
 		}
-		_ = cbRec
-		coinbase := types.Output{
-			Features: types.OutputFeaturesCoinbase,
-			Commit:   commit,
+		rec, err := m.cbStore.NewRecord(height, amount)
+		if err != nil {
+			return nil, err
 		}
-		outputs = append(outputs, coinbase)
+		sig, err := wallet.SignCoinbase(tip.NetworkMagic, rec)
+		if err != nil {
+			return nil, err
+		}
+		rewardRec = &rec
+		commit := rec.Commit
+		outputs = append(outputs, types.Output{Features: types.OutputFeaturesCoinbase, Commit: commit})
 		kernels = append(kernels, types.Kernel{
 			Features:   types.KernelFeaturesCoinbase,
 			Fee:        0,
@@ -235,37 +385,90 @@ func (m *Miner) makeCandidate() (*candidate, error) {
 		})
 	}
 
-	// Transparent dev fee: route the block's total network fees to the public
-	// dev-fund output (value-known F·H + DevFundPoint). Consensus enforces this
-	// in chain.validateDevFund; the coinbase kernel carries Fee 0, so summing
-	// all kernels yields exactly the network-fee total.
-	var totalFee uint64
-	for i := range kernels {
-		totalFee += kernels[i].Fee
-	}
-	if totalFee > 0 {
-		if dc, err := chain.ExpectedDevFundCommit(totalFee); err == nil {
-			outputs = append(outputs, types.Output{
-				Features: types.OutputFeaturesDevFund,
-				Commit:   dc,
-			})
-		}
-	}
-
 	hdr := types.BlockHeader{
-		Version:    types.BlockVersion,
-		Height:     height,
-		Timestamp:  time.Now().Unix(),
-		PrevHash:   prevHash,
-		OutputRoot: merkleOutputs(outputs),
-		KernelRoot: merkleKernels(kernels),
-		Difficulty: difficulty,
+		Version:      types.BlockVersion,
+		Height:       height,
+		Timestamp:    timestamp,
+		PrevHash:     prevHash,
+		NetworkMagic: tip.NetworkMagic,
+		Difficulty:   difficulty,
 	}
+	block := &types.Block{Header: hdr, Inputs: inputs, Outputs: outputs, Kernels: kernels}
+	types.SetBlockRoots(block)
 	return &candidate{
-		block:       &types.Block{Header: hdr, Inputs: inputs, Outputs: outputs, Kernels: kernels},
+		block:       block,
 		kernelsByTx: kernelTx,
+		txs:         sel.txs,
 		difficulty:  difficulty,
+		reward:      rewardRec,
 	}, nil
+}
+
+// selection is the transaction part of a candidate block.
+type selection struct {
+	inputs  []types.Input
+	outputs []types.Output
+	kernels []types.Kernel
+	txs     []*types.Transaction
+	ids     [][32]byte
+	fees    uint64
+}
+
+// selectTransactions packs pending transactions into a block at height while
+// keeping room for the block's mandatory coinbase (chain.CoinbaseReserve). The
+// reserve is re-decided on the cumulative fees, so a zero-fee transaction that
+// fills a post-emission block cannot displace a coinbase a later paying
+// transaction would require: that later transaction is skipped. drop discards
+// transactions that turned out to be invalid or conflicting.
+func selectTransactions(height uint64, txs []*types.Transaction, validate func(*types.Transaction) error, drop func([32]byte)) selection {
+	var sel selection
+	bodyBytes := 0
+	seenOutputs := map[types.Commitment]bool{}
+	for _, tx := range txs {
+		size := len(types.EncodeTransaction(tx)) + 128*(len(tx.Inputs)+len(tx.Outputs)+len(tx.Kernels))
+		proposedFees := sel.fees
+		for _, k := range tx.Kernels {
+			if k.Fee > math.MaxInt64-proposedFees {
+				proposedFees = math.MaxUint64
+				break
+			}
+			proposedFees += k.Fee
+		}
+		if proposedFees > math.MaxInt64 {
+			continue
+		}
+		reserveOutputs, reserveKernels, reserveBytes := chain.CoinbaseReserve(height, proposedFees)
+		if uint64(bodyBytes+size)+reserveBytes > types.MaxBlockBodyBytes || len(sel.inputs)+len(tx.Inputs) > types.MaxBlockInputs || len(sel.outputs)+len(tx.Outputs)+reserveOutputs > types.MaxBlockOutputs || len(sel.kernels)+len(tx.Kernels)+reserveKernels > types.MaxBlockKernels {
+			continue
+		}
+		if err := validate(tx); err != nil {
+			drop(mempool.TxID(tx))
+			continue
+		}
+		txFees := proposedFees - sel.fees
+		conflict := false
+		for _, out := range tx.Outputs {
+			if seenOutputs[out.Commit] {
+				conflict = true
+				break
+			}
+		}
+		if conflict {
+			drop(mempool.TxID(tx))
+			continue
+		}
+		for _, out := range tx.Outputs {
+			seenOutputs[out.Commit] = true
+		}
+		bodyBytes += size
+		sel.fees += txFees
+		sel.inputs = append(sel.inputs, tx.Inputs...)
+		sel.outputs = append(sel.outputs, tx.Outputs...)
+		sel.kernels = append(sel.kernels, tx.Kernels...)
+		sel.txs = append(sel.txs, tx)
+		sel.ids = append(sel.ids, mempool.TxID(tx))
+	}
+	return sel
 }
 
 func nextDifficulty(c *chain.Chain, tip types.BlockHeader) uint64 {
@@ -276,32 +479,46 @@ func nextDifficulty(c *chain.Chain, tip types.BlockHeader) uint64 {
 // The first valid nonce wins; the rest are cancelled.
 func (m *Miner) grindBlock(ctx context.Context, c *candidate, threads int) *types.Block {
 	type result struct {
-		nonce uint64
-		ok    bool
+		header types.BlockHeader
+		stale  bool
+		ok     bool
 	}
 	out := make(chan result, threads)
 	mineCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	headerTemplate := c.block.Header
+	var workers sync.WaitGroup
+	defer workers.Wait()
+	defer cancel()
 	for t := 0; t < threads; t++ {
+		workers.Add(1)
 		go func(start uint64) {
-			hdr := c.block.Header
+			defer workers.Done()
+			hdr := headerTemplate
 			for n := start; ; n += uint64(threads) {
 				select {
 				case <-mineCtx.Done():
 					return
 				default:
 				}
+				tip, ok := m.chain.Tip()
+				if !ok || types.HeaderID(&tip) != hdr.PrevHash {
+					out <- result{stale: true}
+					return
+				}
 				hdr.Nonce = n
 				m.hashCount.Add(1)
 				if pow.Verify(&hdr) {
-					out <- result{nonce: n, ok: true}
+					out <- result{header: hdr, ok: true}
 					return
 				}
 				// Refresh timestamp every 1024 attempts so block isn't
 				// stamped at start-of-grind.
 				if n%1024 == 0 {
-					hdr.Timestamp = time.Now().Unix()
+					if now := time.Now().Unix(); now > hdr.Timestamp {
+						hdr.Timestamp = now
+					}
 				}
 			}
 		}(uint64(t))
@@ -312,71 +529,13 @@ func (m *Miner) grindBlock(ctx context.Context, c *candidate, threads int) *type
 		case <-ctx.Done():
 			return nil
 		case r := <-out:
+			if r.stale {
+				return nil
+			}
 			if r.ok {
-				c.block.Header.Nonce = r.nonce
+				c.block.Header = r.header
 				return c.block
 			}
 		}
 	}
-}
-
-func coinbaseCommit(rewardTo string, height uint64) types.Commitment {
-	h := sha256.Sum256([]byte("coinbase:" + rewardTo + ":" + uint64ToStr(height)))
-	var c types.Commitment
-	c[0] = 0x02
-	copy(c[1:], h[:32])
-	return c
-}
-
-func uint64ToStr(n uint64) string {
-	const digits = "0123456789"
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = digits[n%10]
-		n /= 10
-	}
-	return string(buf[i:])
-}
-
-func merkleOutputs(outs []types.Output) types.Hash {
-	leaves := make([]types.Hash, len(outs))
-	for i := range outs {
-		leaves[i] = types.OutputID(&outs[i])
-	}
-	return merkle(leaves)
-}
-
-func merkleKernels(kernels []types.Kernel) types.Hash {
-	leaves := make([]types.Hash, len(kernels))
-	for i := range kernels {
-		leaves[i] = types.KernelID(&kernels[i])
-	}
-	return merkle(leaves)
-}
-
-func merkle(leaves []types.Hash) types.Hash {
-	if len(leaves) == 0 {
-		return types.Hash{}
-	}
-	level := make([]types.Hash, len(leaves))
-	copy(level, leaves)
-	for len(level) > 1 {
-		if len(level)%2 == 1 {
-			level = append(level, level[len(level)-1])
-		}
-		next := make([]types.Hash, len(level)/2)
-		for i := 0; i < len(level); i += 2 {
-			var buf [64]byte
-			copy(buf[:32], level[i][:])
-			copy(buf[32:], level[i+1][:])
-			next[i/2] = sha256.Sum256(buf[:])
-		}
-		level = next
-	}
-	return level[0]
 }

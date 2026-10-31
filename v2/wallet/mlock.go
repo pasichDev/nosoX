@@ -12,7 +12,7 @@ package wallet
 // the platform-specific file (mlock_windows.go / mlock_unix.go) wire
 // the actual primitive.
 //
-// Failures from mlock are logged but NOT fatal — a wallet should
+// Failures from mlock are returned by LockBytes; Load treats them as best effort. A wallet can
 // still function even on a host where mlock isn't permitted (e.g. a
 // container without IPC_LOCK). Zeroization always works.
 
@@ -38,7 +38,7 @@ func Zeroize(b []byte) {
 	}
 }
 
-// Close zeroizes and unlocks the wallet's in-memory secrets. Idempotent.
+// Close zeroizes and unlocks the mutable master key. Idempotent.
 func (w *Wallet) Close() {
 	if w == nil {
 		return
@@ -48,9 +48,5 @@ func (w *Wallet) Close() {
 		UnlockBytes(w.Master)
 		w.Master = nil
 	}
-	for k, entry := range w.Legacy {
-		priv := []byte(entry.PrivateKey)
-		Zeroize(priv)
-		delete(w.Legacy, k)
-	}
+	w.Plain = plainView{}
 }

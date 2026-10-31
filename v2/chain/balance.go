@@ -2,9 +2,10 @@ package chain
 
 import (
 	"errors"
+	"fmt"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // ErrBalance is returned when a block's Mimblewimble commitment sum does not
@@ -12,14 +13,14 @@ import (
 var ErrBalance = errors.New("chain: block does not balance")
 
 // validateBalance enforces the core MW no-inflation invariant for the regular
-// (non-coinbase, non-dev) value flow of a block:
+// (non-coinbase) value flow of a block:
 //
 //	Σ plain_outputs − Σ inputs + totalFee·H == Σ tx_kernel_excess
 //
-// Coinbase and dev-fund outputs are value-known and verified separately
-// (VerifyCoinbase over the subsidy, validateDevFund over F·H+DevFundPoint), so
-// they cancel out of this equation and are excluded here. Genesis (height 0) is
-// skipped: it mints value-known legacy/coinbase outputs with no spends.
+// The coinbase output is value-known and verified separately (VerifyCoinbase
+// over reward + F), so it is excluded here. The fee term F·H stays: spends
+// destroy F and the coinbase re-creates it for the miner. Genesis (height 0) is
+// skipped: it is empty and has no spends.
 //
 // Rearranged for the curve check Σpos − Σneg == identity:
 //
@@ -27,7 +28,7 @@ var ErrBalance = errors.New("chain: block does not balance")
 //	neg = {inputs} ∪ {non-coinbase kernel excesses}
 func (c *Chain) validateBalance(b *types.Block) error {
 	if b.Header.Height == 0 {
-		return nil // genesis carries value-known outputs only
+		return nil // genesis is empty
 	}
 
 	var pos, neg [][33]byte
@@ -39,13 +40,16 @@ func (c *Chain) validateBalance(b *types.Block) error {
 	for i := range b.Inputs {
 		neg = append(neg, b.Inputs[i].Commit)
 	}
-	var totalFee uint64
 	for i := range b.Kernels {
 		if b.Kernels[i].Features == types.KernelFeaturesCoinbase {
 			continue // coinbase kernel excess is the value-known coinbase commit
 		}
 		neg = append(neg, b.Kernels[i].Excess)
-		totalFee += b.Kernels[i].Fee
+	}
+	// The same fee total CoinbaseAmount pays out to the miner.
+	totalFee, err := PlainKernelFees(b)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrBalance, err)
 	}
 
 	// Nothing to balance (e.g. a coinbase-only block): trivially valid.

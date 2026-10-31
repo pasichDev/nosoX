@@ -8,25 +8,135 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-test:
-    runs-on: ubuntu-latest
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: '1.25.x'
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "gofmt needed for:"; echo "$out"; exit 1
+          fi
+      - name: go mod tidy
+        run: go mod tidy -diff
+      - name: go mod verify
+        run: go mod verify
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      # goinstall builds golangci-lint with the Go version above, so it can
+      # analyze modules that require a newer Go than the prebuilt binary.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          install-mode: goinstall
+
+  vuln:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          govulncheck ./...
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # The release binary is installed directly and checked against a pinned
+      # checksum. This needs no licence key and works for user and org repos.
+      - name: install gitleaks
+        run: |
+          set -euo pipefail
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$f" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$f"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP" gitleaks
+          sudo install -m 0755 "$RUNNER_TEMP/gitleaks" /usr/local/bin/gitleaks
+      - name: scan history
+        run: gitleaks git --redact --verbose --no-banner .
+      - name: scan working tree
+        run: gitleaks dir --redact --no-banner .
+
+  build-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
           cache: true
       - name: go vet
-        run: go vet ./...
+        run: go vet -p 2 ./...
       - name: build
-        run: go build ./...
-      - name: test (race + coverage)
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: go build -p 2 ./...
+      # Release archives include windows/amd64; make sure it keeps compiling.
+      - name: cross-compile windows/amd64
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -p 2 ./...
+      - name: race tests
+        shell: bash
+        run: |
+          mkdir -p .ci-logs
+          set -o pipefail
+          go test -race -p 2 -timeout 45m ./... -count=1 2>&1 | tee .ci-logs/race.log
+      - name: coverage tests
+        shell: bash
+        run: |
+          mkdir -p .ci-logs
+          set -o pipefail
+          go test -p 2 -timeout 30m -coverprofile=coverage.out ./... -count=1 2>&1 | tee .ci-logs/coverage.log
       - name: coverage summary
         run: go tool cover -func=coverage.out | tail -1
-      - name: upload coverage
-        uses: actions/upload-artifact@v4
+      - name: upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: coverage
-          path: coverage.out
+          name: ci-diagnostics
+          path: |
+            .ci-logs/
+            coverage.out
+          # .ci-logs is a hidden directory, which upload-artifact skips by default:
+          # without this the race log was missing exactly when it was needed.
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

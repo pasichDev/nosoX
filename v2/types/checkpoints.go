@@ -27,8 +27,9 @@ type Checkpoint struct {
 // once mainnet has produced enough blocks to be checkpointed.
 //
 // Format reminder for whoever appends entries:
-//   {Height: 1_000,  Hash: parseHex("…")},
-//   {Height: 2_000,  Hash: parseHex("…")},
+//
+//	{Height: 1_000,  Hash: parseHex("…")},
+//	{Height: 2_000,  Hash: parseHex("…")},
 //
 // To produce a hash use `nosox-cli tip` on a trusted node at the
 // target height and copy its `hash` field.

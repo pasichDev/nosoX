@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify a downloaded Noso v2 release.
+# Verify a downloaded NosoX release.
 #
 # Usage:
 #   scripts/verify-release.sh path/to/release-dir
@@ -9,6 +9,7 @@ set -euo pipefail
 
 DIR="${1:?usage: verify-release.sh <dir> [launcher.pub]}"
 PUB="${2:-}"
+if [[ -n "$PUB" ]]; then PUB="$(realpath -- "$PUB")"; fi
 
 cd "$DIR"
 
@@ -18,7 +19,11 @@ if [[ ! -f SHA256SUMS ]]; then
 fi
 
 echo "==> Verifying SHA256SUMS against actual files"
-sha256sum -c SHA256SUMS
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c SHA256SUMS
+else
+  shasum -a 256 -c SHA256SUMS
+fi
 echo "  ✓ all hashes match"
 
 if [[ -n "$PUB" ]]; then
@@ -34,4 +39,8 @@ if [[ -n "$PUB" ]]; then
   minisign -V -p "$PUB" -m SHA256SUMS
   echo "  ✓ signature verifies under $PUB"
 fi
-echo "Release is good."
+if [[ -z "$PUB" ]]; then
+  echo "Checksums match; publisher authenticity was not checked."
+else
+  echo "Checksums and publisher signature verified."
+fi

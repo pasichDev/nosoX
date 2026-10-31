@@ -1,22 +1,9 @@
 package crypto
 
-// Constant-time SchnorrSign implementation.
-//
-// The existing SchnorrSign in schnorr.go calls
-// `elliptic.Curve.ScalarBaseMult(x.Bytes())` and `big.Int` arithmetic,
-// both of which leak timing on the secret scalars.
-//
-// This file provides `schnorrSignCT` that uses decred's
-// `secp256k1.PrivateKey` and `ModNScalar` types. Internally they:
-//
-//   - Multiply `k·G` via a fixed-base table with byte-level masking
-//     designed to be branch- and lookup-free (constant-time).
-//   - Add scalars modulo n via the `ModNScalar` type, which performs
-//     reductions in fixed time.
-//
-// The wire output is byte-identical to the existing schnorrSign
-// (R(33) || s(32) compressed) so verifiers don't care which
-// implementation produced the signature.
+// Scalar-based Schnorr implementation. The exported historical name is kept
+// for API compatibility. It is NOT a constant-time signing guarantee:
+// decred PrivateKey.PubKey calls ScalarBaseMultNonConst. A reviewed secret
+// multiplication implementation is required before side-channel-sensitive use.
 
 import (
 	"crypto/rand"
@@ -25,16 +12,12 @@ import (
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
-// SchnorrSignConstantTime is the side-channel-resistant signing
-// primitive. Recommended for production. The variable-time SchnorrSign
-// is kept for backward-compatibility and round-trip tests.
+// SchnorrSignConstantTime retains its historical name; see the warning above.
 func SchnorrSignConstantTime(x []byte, msg []byte) ([]byte, error) {
 	if len(x) != 32 {
 		return nil, errors.New("schnorr: bad scalar length")
 	}
-	// Wrap x as a secp256k1.PrivateKey. The constructor performs
-	// scalar reduction in constant time and the PubKey method uses the
-	// fixed-base table for constant-time multiplication.
+	// Parse the scalar without silently reducing out-of-range secrets.
 	var xScalar secp.ModNScalar
 	if overflow := xScalar.SetByteSlice(x); overflow {
 		return nil, errors.New("schnorr: scalar overflows curve order")
@@ -49,20 +32,22 @@ func SchnorrSignConstantTime(x []byte, msg []byte) ([]byte, error) {
 
 	// Random nonce k. Rejection-sample until k is in [1, n).
 	var kScalar secp.ModNScalar
+	sampled := false
 	for tries := 0; tries < 16; tries++ {
 		var kBytes [32]byte
 		if _, err := rand.Read(kBytes[:]); err != nil {
 			return nil, err
 		}
 		if overflow := kScalar.SetByteSlice(kBytes[:]); !overflow && !kScalar.IsZero() {
+			sampled = true
 			break
 		}
 	}
-	if kScalar.IsZero() {
+	if !sampled {
 		return nil, errors.New("schnorr: failed to sample nonce")
 	}
 
-	// R = k·G. PubKey-from-private-key uses constant-time fixed-base.
+	// R = k·G. PubKey uses variable-time multiplication.
 	rPriv := secp.NewPrivateKey(&kScalar)
 	rBytes := rPriv.PubKey().SerializeCompressed()
 	var R [33]byte

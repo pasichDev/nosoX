@@ -1,13 +1,11 @@
 package chain
 
 import (
-	"crypto/sha256"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/noso-project/noso-go/v2/pow"
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/pow"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // helper: produce a low-difficulty header that meets PoW after a few
@@ -16,7 +14,7 @@ func easyHeader(parentHash types.Hash, height uint64) types.BlockHeader {
 	return types.BlockHeader{
 		Version:    types.BlockVersion,
 		Height:     height,
-		Timestamp:  time.Now().Unix(),
+		Timestamp:  baseTime + int64(height)*types.TargetBlockTimeSeconds,
 		PrevHash:   parentHash,
 		Difficulty: 1,
 		Nonce:      1,
@@ -25,13 +23,15 @@ func easyHeader(parentHash types.Hash, height uint64) types.BlockHeader {
 
 func mineEasy(parentHash types.Hash, height uint64) *types.Block {
 	h := easyHeader(parentHash, height)
+	b := &types.Block{Header: h}
+	sealFixture(b)
 	for n := uint64(0); n < 1024; n++ {
-		h.Nonce = n
-		if pow.Verify(&h) {
+		b.Header.Nonce = n
+		if pow.Verify(&b.Header) {
 			break
 		}
 	}
-	return &types.Block{Header: h}
+	return b
 }
 
 func TestMemoryStoreAddAndUndo(t *testing.T) {
@@ -57,14 +57,15 @@ func TestMemoryStoreAddAndUndo(t *testing.T) {
 	anchorHash := types.HeaderID(&anchor)
 	forkA := mineEasy(anchorHash, 2)
 	forkB := mineEasy(types.HeaderID(&forkA.Header), 3)
-	if err := c.ReorgTo([]*types.Block{forkA, forkB}); err != nil {
+	forkC := mineEasy(types.HeaderID(&forkB.Header), 4)
+	if err := c.ReorgTo([]*types.Block{forkA, forkB, forkC}); err != nil {
 		t.Fatalf("ReorgTo: %v", err)
 	}
-	if c.Height() != 3 {
+	if c.Height() != 4 {
 		t.Fatalf("height after reorg = %d", c.Height())
 	}
 	tip, _ := c.Tip()
-	if types.HeaderID(&tip) != types.HeaderID(&forkB.Header) {
+	if types.HeaderID(&tip) != types.HeaderID(&forkC.Header) {
 		t.Fatalf("tip != forkB after reorg")
 	}
 }
@@ -76,6 +77,7 @@ func TestBadgerStorePersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	genesis := mineEasy(types.Hash{}, 0)
+	types.SetBlockRoots(genesis)
 	if err := c.LoadOrInit(dir, genesis); err != nil {
 		t.Fatal(err)
 	}
@@ -113,22 +115,24 @@ func TestUTXODeltaThroughBadger(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	// Genesis with a single legacy output for address "Nfoo".
-	var commit types.Commitment
-	commit[0] = 0x02
-	copy(commit[1:], sha256.New().Sum([]byte("Nfoo")))
 	genesis := mineEasy(types.Hash{}, 0)
-	genesis.Outputs = []types.Output{{
-		Features:      types.OutputFeaturesLegacy,
-		Commit:        commit,
-		LegacyAddress: "Nfoo",
-		LegacyAmount:  1234,
-	}}
 	if err := c.LoadOrInit(dir, genesis); err != nil {
 		t.Fatal(err)
 	}
-	bal, ok := c.LookupLegacyBalance("Nfoo")
-	if !ok || bal != 1234 {
-		t.Fatalf("legacy balance lookup: ok=%v bal=%d", ok, bal)
+	// Genesis is empty: nothing is spendable before the first mined block.
+	if c.store.HasUTXO(storePoint(t, 1)) {
+		t.Fatal("empty genesis produced a UTXO")
+	}
+	b := mineEasy(types.HeaderID(&genesis.Header), 1)
+	if err := c.AddBlock(b); err != nil {
+		t.Fatal(err)
+	}
+	cb := b.Outputs[0]
+	got, ok := c.store.UTXOByCommit(cb.Commit)
+	if !ok || got.Features != types.OutputFeaturesCoinbase || got.Commit != cb.Commit {
+		t.Fatalf("coinbase output missing from UTXO set: ok=%v out=%+v", ok, got)
+	}
+	if !c.store.HasOutput(cb.Commit) {
+		t.Fatal("coinbase output missing from historical index")
 	}
 }

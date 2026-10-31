@@ -1,78 +1,57 @@
-# Contributing to NosoX
+# Contributing
 
-> Before you start: this is currently a **testnet/research repo**.
-> Mainnet launch waits on the external audit. Treat the code as a
-> design vehicle, not as production money infrastructure.
+Read [audit/CONSENSUS_INVARIANTS.md](audit/CONSENSUS_INVARIANTS.md) before
+changing validation. This project is experimental and has not been
+independently audited.
 
-## How to set up
+## Setup
+
+Use the Go version in `go.mod`. Fork the repository, create a branch, and
+run before opening a pull request:
 
 ```bash
-git clone https://github.com/<you>/noso-go
-cd noso-go
+gofmt -l .            # must print nothing
+go mod tidy -diff     # must print nothing
+go vet ./...
 go build ./...
-go test ./...
+go test ./... -count=1
+go test -race ./... -count=1
+golangci-lint run     # configuration in .golangci.yml
 ```
 
-Go 1.23 or newer required. No CGO. All dependencies are pinned via
-`go.mod` / `go.sum`.
+Use `-p 2` on small machines. Fuzz targets run with `go test -fuzz`; see the
+list in [audit/EXTERNAL_CRYPTO_REVIEW_PACKET.md](audit/EXTERNAL_CRYPTO_REVIEW_PACKET.md).
 
-## What's most welcome
+## Rules for consensus changes
 
-In order of where help is most needed:
+- Add a negative test that goes through `AddBlock`, `ValidateTransaction` or
+  `ReorgTo`, a valid control case, and an assertion that state is unchanged on
+  both stores.
+- Check that the test fails for the intended reason. An earlier guard can hide a
+  missing check.
+- Do not weaken a monetary rule to make a fixture pass.
+- A consensus change needs a protocol version bump and an entry in the
+  changelog.
+- Do not change the subsidy, the coinbase amount (subsidy plus fees) or the fee rule as a side
+  effect of another change.
+- Do not describe code as constant time unless a reviewer has confirmed it.
+- A new cryptographic dependency or construction needs a written justification
+  and independent review.
 
-1. **Audit feedback.** When the external review starts, public
-   reproduction of findings is critical. Please file issues with
-   minimal reproducers.
-2. **Mobile light-client.** Compact filters ship; we need a wallet
-   mode that syncs filters instead of full blocks. Reference:
-   `v2/types/filter.go`, BIP-157/158-style protocol.
-3. **Encrypted messenger protocol** on top of `v2/crypto` and
-   `v2/p2p`. Design doc PR appreciated before implementation.
-4. **Translations.** Documentation in Ukrainian, Spanish, Japanese,
-   German is sorely missing. Open a PR with `docs/v2/<file>.<lang>.md`.
-5. **Repro test cases for AUDIT.md items** as they get closed.
+## Pull requests
 
-## What's NOT welcome
+Keep commits focused and use imperative messages. Update the documentation in
+`docs/` when behavior changes. The documentation site builds in strict mode:
 
-- Premine / founder allocation requests. Locked at 0 by spec.
-- "Quick exchange listing" pitches. Read `docs/v2/EXCHANGES.md`.
-- Marketing copy that promises mainnet-grade safety. We're honest:
-  pre-audit, testnet-only.
-- Adding `v2/types` fields without a corresponding hard-fork plan.
-  Consensus rules are stable.
-
-## Coding standards
-
-- `gofmt -s` everything before committing.
-- Tests for new public functions. The bar is "round-trip + tamper +
-  wrong-input" coverage at minimum.
-- Constant-time primitives for any new code that touches secrets
-  (private keys, blinding factors). Use `decred/dcrd/dcrec/secp256k1/v4`
-  `ModNScalar` / `PrivateKey.PubKey()` patterns from `v2/crypto/schnorr_ct.go`
-  and `v2/crypto/borromean_ct.go`.
-- No new dependencies without justification.
-- Don't add emojis to source files.
-
-## Commit messages
-
-Format: `<area>: <short imperative>` — example:
-
+```bash
+pip install -r docs/requirements.txt
+mkdocs build --strict -d /tmp/site
 ```
-v2/wallet: claim builder produces real signed Transaction
-docs/v2: README documents migration test procedure
-v2/p2p: drop the old JSON-TCP gossip (superseded by libp2p)
-```
+
+## Reporting vulnerabilities
+
+Do not use public issues. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-Contributing implies you license your contribution under the
-project's MIT license.
-
-## Security disclosure
-
-For security issues, please **do not open a public issue**. Email
-the maintainer (contact info on the project's GitHub profile) or
-use GitHub's private-issue feature.
-
-We will not run a bug-bounty program until after the external audit
-and mainnet launch.
+Contributions are licensed under the MIT license in [LICENSE](LICENSE).

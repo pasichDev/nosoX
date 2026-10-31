@@ -4,62 +4,61 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 func TestEmptyGenesis(t *testing.T) {
-	stats, err := Summarize(Config{})
+	stats, err := Summarize(Default())
 	if err != nil {
 		t.Fatal(err)
-	}
-	if stats.LegacyAccounts != 0 || stats.TotalCarried != 0 || stats.LegacyGVTs != 0 {
-		t.Errorf("empty genesis has accounts/total: %+v", stats)
 	}
 	if stats.GenesisHash.IsZero() {
 		t.Error("genesis hash should be non-zero")
 	}
+	if stats.Difficulty != Default().InitialDifficulty || stats.NetworkMagic != types.NetworkMagicMainnet {
+		t.Errorf("unexpected defaults: %+v", stats)
+	}
 }
 
-func TestGenesisFromFixture59238(t *testing.T) {
-	path, err := filepath.Abs(filepath.Join("..", "..", "testdata", "sumary_59238.psk"))
+func TestGenesisCarriesNoAllocations(t *testing.T) {
+	block, err := Build(Default())
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Default()
-	cfg.SummaryPath = path
-	block, info, gvts, err := Build(cfg)
-	if err != nil {
-		t.Fatal(err)
+	if block.Header.Height != 0 || !block.Header.PrevHash.IsZero() {
+		t.Errorf("bad genesis position: height=%d prev=%s", block.Header.Height, block.Header.PrevHash)
 	}
-	if block.Header.Height != 0 {
-		t.Errorf("genesis height = %d, want 0", block.Header.Height)
+	if block.Header.Version != types.BlockVersion {
+		t.Errorf("genesis version %d, want %d", block.Header.Version, types.BlockVersion)
 	}
-	if len(info) < 100 {
-		t.Errorf("only %d legacy outputs carried; expected many more", len(info))
+	if len(block.Inputs) != 0 || len(block.Outputs) != 0 || len(block.Kernels) != 0 {
+		t.Errorf("genesis must be empty: %d in, %d out, %d kernels", len(block.Inputs), len(block.Outputs), len(block.Kernels))
 	}
-	if len(info)+len(gvts) != len(block.Outputs) {
-		t.Errorf("info+gvts/outputs length mismatch: %d+%d vs %d", len(info), len(gvts), len(block.Outputs))
-	}
-	for i, o := range block.Outputs {
-		switch o.Features {
-		case types.OutputFeaturesLegacy:
-			if o.LegacyAmount <= 0 {
-				t.Errorf("output %d amount %d", i, o.LegacyAmount)
-			}
-		case types.OutputFeaturesLegacyGVT:
-			if o.LegacyAmount != types.GVTBaseValue {
-				t.Errorf("GVT %d has amount %d, want %d", o.GVTNumber, o.LegacyAmount, types.GVTBaseValue)
-			}
-		default:
-			t.Errorf("output %d unexpected feature %d", i, o.Features)
-		}
-	}
-	// Determinism: re-running with same config produces the same hash.
-	stats1, _ := Summarize(cfg)
-	stats2, _ := Summarize(cfg)
+	// Determinism: re-running with the same config produces the same hash.
+	stats1, _ := Summarize(Default())
+	stats2, _ := Summarize(Default())
 	if stats1.GenesisHash != stats2.GenesisHash {
 		t.Errorf("genesis not deterministic")
 	}
-	t.Logf("genesis: %d legacy outputs, total carried %d base units (%.4f NOSO), hash %s",
-		stats1.LegacyAccounts, stats1.TotalCarried, float64(stats1.TotalCarried)/1e8, stats1.GenesisHash)
+}
+
+func TestBuiltGenesisIsAcceptedByChain(t *testing.T) {
+	block, err := Build(Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := chain.NewMemory()
+	if err := mem.LoadOrInit(t.TempDir(), block); err != nil {
+		t.Fatalf("memory: %v", err)
+	}
+	dir := filepath.Join(t.TempDir(), "badger")
+	disk, err := chain.NewBadger(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer disk.Close()
+	if err := disk.LoadOrInit(dir, block); err != nil {
+		t.Fatalf("badger: %v", err)
+	}
 }

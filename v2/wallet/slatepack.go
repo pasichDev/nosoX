@@ -1,269 +1,320 @@
 package wallet
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
+	"bytes"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/big"
+	"math"
 	"strings"
+	"unicode/utf8"
 
-	v2crypto "github.com/noso-project/noso-go/v2/crypto"
-	"github.com/noso-project/noso-go/v2/types"
+	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
+
+	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
-// Slatepack is the asynchronous coordination payload for native MW
-// transactions. The interactive 3-step build is:
+// A slate is the message exchanged between sender and receiver to build one
+// two-party Mimblewimble transaction. Format version 3 (prefix "SLATEPACK3.")
+// adds the network magic to version 2; version 1 (Ed25519 intent) and version 2
+// slates are rejected.
 //
-//	1. Sender   → builds a SlateOffer (inputs + change output + partial sig)
-//	2. Receiver → adds an output + partial signature → SlateResponse
-//	3. Sender   → aggregates signatures and broadcasts → SlateFinal
+//	Stage 1 (offer):    sender -> receiver
+//	Stage 2 (response): receiver -> sender
 //
-// Each slate is wrapped as Base58 of CBOR-like JSON. The receiver+sender
-// exchange the string out-of-band (QR, message, file).
+// There is no third slate: the sender finalizes locally and submits the
+// transaction to a node.
 //
-// To keep the package small, this module ships the codec and stage
-// helpers. The actual MW transaction graph (Pedersen commit balance,
-// kernel excess, range proof generation) is delegated to v2/crypto.
-// A full interactive negotiation flow is wired up in nosox-cli.
+// The wire form is a fixed binary layout (see Slate.MarshalBinary) wrapped in
+// unpadded base64url. Decoding is bounded and strict: every count is capped
+// before allocation, points must be valid non-identity curve points, scalars
+// canonical and non-zero, and trailing bytes are an error.
 
-// SlateRole identifies the participant in the protocol.
-type SlateRole uint8
-
-const (
-	RoleSender   SlateRole = 1
-	RoleReceiver SlateRole = 2
-)
-
-// SlateStage tracks where the slate is in the 3-step handshake.
+// SlateStage tracks where the slate is in the 2-message handshake.
 type SlateStage uint8
 
 const (
 	StageOffer    SlateStage = 1
 	StageResponse SlateStage = 2
-	StageFinal    SlateStage = 3
 )
 
-// Slate is the on-the-wire object exchanged between sender and receiver.
-// All Pedersen commits and signatures use compressed-point/Schnorr-ish
-// encodings native to v2/crypto and v2/types.
+const (
+	// SlateVersion is the only supported slate format version.
+	SlateVersion = 3
+	// SlatePrefix starts every encoded slate.
+	SlatePrefix        = "SLATEPACK3."
+	legacySlatePrefix  = "SLATEPACK1."
+	legacySlatePrefix2 = "SLATEPACK2."
+
+	// MaxSlateEncoded bounds the text form (a full response slate is ~40 KB).
+	MaxSlateEncoded = 64 << 10
+	// MaxSlateMemo bounds the free-text memo in bytes.
+	MaxSlateMemo = 256
+	// MaxLockHeight caps a requested kernel lock height as a sanity bound.
+	MaxLockHeight = uint64(1) << 40
+	// MaxSlateInputs: a transaction may spend at most MaxBlockInputs outputs.
+	MaxSlateInputs = types.MaxBlockInputs
+)
+
+// Slate is the exchanged object. Sender fields are fixed by the offer; the
+// receiver adds the Recv* fields. The slate never carries a secret.
 type Slate struct {
-	Version   uint16          `json:"v"`
-	Stage     SlateStage      `json:"s"`
-	Role      SlateRole       `json:"r"`
-	TxID      [16]byte        `json:"tid"`     // random session id
-	Amount    int64           `json:"amt"`     // gross amount the receiver receives
-	Fee       uint64          `json:"fee"`     // kernel fee (split is sender's problem)
-	LockHeight uint64         `json:"lh"`      // kernel lock height
-	Inputs    []SlateInput    `json:"in,omitempty"`
-	Outputs   []SlateOutput   `json:"out,omitempty"`
-	PartSigs  []PartialSig    `json:"psigs,omitempty"` // collected partial signatures
-	Excess    types.Commitment `json:"exc"`            // running excess sum
-	Memo      string          `json:"memo,omitempty"`
+	Stage      SlateStage
+	TxID       [16]byte // random session id chosen by the sender
+	Magic      uint32   // network magic the kernel signature is bound to
+	Amount     int64    // value the receiver's output will hold
+	Fee        uint64   // kernel fee, paid by the sender
+	LockHeight uint64   // kernel lock height
+	Inputs     []types.Input
+	Change     *types.Output // sender's change output, nil when change is zero
+	SenderExc  types.Commitment
+	SenderNon  types.Commitment
+	Memo       string
+
+	// Response-only.
+	RecvOutput  *types.Output
+	RecvExc     types.Commitment
+	RecvNon     types.Commitment
+	RecvPartial [32]byte
 }
 
-// SlateInput is a Pedersen commit (with optional legacy fields) the
-// sender contributes to the transaction.
-type SlateInput struct {
-	Commit       types.Commitment       `json:"c"`
-	Features     types.OutputFeatures   `json:"f"`
-	LegacyAddr   string                 `json:"la,omitempty"`
-	LegacyAmount int64                  `json:"lv,omitempty"`
-	LegacySig    string                 `json:"lsig,omitempty"`
+// ErrSlate is wrapped by slate validation failures.
+var ErrSlate = errors.New("wallet: invalid slate")
+
+func slateErr(format string, a ...any) error {
+	return fmt.Errorf("%w: %s", ErrSlate, fmt.Sprintf(format, a...))
 }
 
-// SlateOutput is a Pedersen commit produced by either party.
-type SlateOutput struct {
-	Commit     types.Commitment    `json:"c"`
-	Features   types.OutputFeatures `json:"f"`
-	RangeProof []byte              `json:"rp"`
+// canonicalScalar reports whether b is a non-zero scalar below the group order.
+func canonicalScalar(b [32]byte) bool {
+	var s secp.ModNScalar
+	return s.SetBytes(&b) == 0 && !s.IsZero()
 }
 
-// PartialSig is one side's contribution to the aggregated kernel sig.
-type PartialSig struct {
-	By  SlateRole `json:"by"`
-	Sig []byte    `json:"sig"` // Ed25519 signature over the canonical sign-hash
-	Pub []byte    `json:"pub"` // signer's Ed25519 public key
-}
-
-// NewOfferSlate builds the sender's stage-1 slate. The sender contributes
-// inputs that cover (amount + fee) and a change output for the difference;
-// the receiver will add an output for the gross amount later.
-func NewOfferSlate(amount int64, fee uint64, lockHeight uint64, memo string) *Slate {
-	var tid [16]byte
-	_, _ = rand.Read(tid[:])
-	return &Slate{
-		Version:    1,
-		Stage:      StageOffer,
-		Role:       RoleSender,
-		TxID:       tid,
-		Amount:     amount,
-		Fee:        fee,
-		LockHeight: lockHeight,
-		Memo:       memo,
+// validateOffer checks the sender-side fields shared by both stages.
+func (s *Slate) validateOffer() error {
+	if s.Magic == 0 {
+		return slateErr("missing network magic")
 	}
-}
-
-// SignPartial attaches an Ed25519 partial signature over the canonical
-// sign-hash to the slate.
-func (s *Slate) SignPartial(role SlateRole, priv ed25519.PrivateKey) {
-	hash := s.canonicalSignHash()
-	sig := ed25519.Sign(priv, hash[:])
-	s.PartSigs = append(s.PartSigs, PartialSig{
-		By:  role,
-		Sig: sig,
-		Pub: priv.Public().(ed25519.PublicKey),
-	})
-}
-
-// VerifyPartials checks every collected partial signature.
-func (s *Slate) VerifyPartials() bool {
-	hash := s.canonicalSignHash()
-	for _, ps := range s.PartSigs {
-		if !ed25519.Verify(ed25519.PublicKey(ps.Pub), hash[:], ps.Sig) {
-			return false
+	if s.Amount <= 0 {
+		return slateErr("amount must be positive")
+	}
+	if s.Fee > math.MaxInt64 || uint64(s.Amount) > math.MaxInt64-s.Fee {
+		return slateErr("amount+fee overflow")
+	}
+	if s.LockHeight > MaxLockHeight {
+		return slateErr("lock height out of range")
+	}
+	if len(s.Inputs) == 0 || len(s.Inputs) > MaxSlateInputs {
+		return slateErr("input count")
+	}
+	seen := map[types.Commitment]bool{}
+	for _, in := range s.Inputs {
+		if seen[in.Commit] || !v2crypto.ValidPublicPoint(in.Commit) || !validOutputFeatures(in.Features) {
+			return slateErr("bad or duplicate input")
+		}
+		seen[in.Commit] = true
+	}
+	if s.Change != nil {
+		if s.Change.Features != types.OutputFeaturesPlain || !v2crypto.ValidPublicPoint(s.Change.Commit) || seen[s.Change.Commit] || len(s.Change.RangeProof) == 0 {
+			return slateErr("bad change output")
 		}
 	}
-	return true
-}
-
-// CheckBalance is the Mimblewimble conservation check applied to the
-// slate's inputs and outputs.
-func (s *Slate) CheckBalance() error {
-	negative := make([][33]byte, len(s.Inputs))
-	for i := range s.Inputs {
-		negative[i] = [33]byte(s.Inputs[i].Commit)
+	if !v2crypto.ValidPublicPoint(s.SenderExc) || !v2crypto.ValidPublicPoint(s.SenderNon) {
+		return slateErr("bad sender point")
 	}
-	positive := make([][33]byte, len(s.Outputs))
-	for i := range s.Outputs {
-		positive[i] = [33]byte(s.Outputs[i].Commit)
+	if len(s.Memo) > MaxSlateMemo || !utf8.ValidString(s.Memo) {
+		return slateErr("bad memo")
 	}
-	zero, err := v2crypto.PedersenSumZero(positive, negative, int64(s.Fee))
-	if err != nil {
-		return err
-	}
-	if !zero {
-		return errors.New("slatepack: commitment sum imbalanced")
+	for _, r := range s.Memo {
+		if r < 0x20 || r == 0x7f {
+			return slateErr("control character in memo")
+		}
 	}
 	return nil
 }
 
-func (s *Slate) canonicalSignHash() [32]byte {
-	// Hash the kernel-defining fields. Commitments include any added
-	// outputs/inputs from the receiver's stage-2 response.
-	h := sha256.New()
-	h.Write(s.TxID[:])
-	var b8 [8]byte
-	bigUint64(b8[:], uint64(s.Amount))
-	h.Write(b8[:])
-	bigUint64(b8[:], s.Fee)
-	h.Write(b8[:])
-	bigUint64(b8[:], s.LockHeight)
-	h.Write(b8[:])
-	h.Write(s.Excess[:])
+// Validate performs the structural checks (no proof or signature verification).
+func (s *Slate) Validate() error {
+	if s == nil {
+		return slateErr("nil")
+	}
+	if err := s.validateOffer(); err != nil {
+		return err
+	}
+	switch s.Stage {
+	case StageOffer:
+		if s.RecvOutput != nil || s.RecvExc != (types.Commitment{}) || s.RecvNon != (types.Commitment{}) || s.RecvPartial != ([32]byte{}) {
+			return slateErr("offer carries receiver data")
+		}
+	case StageResponse:
+		o := s.RecvOutput
+		if o == nil || o.Features != types.OutputFeaturesPlain || !v2crypto.ValidPublicPoint(o.Commit) || len(o.RangeProof) == 0 {
+			return slateErr("bad receiver output")
+		}
+		if !v2crypto.ValidPublicPoint(s.RecvExc) || !v2crypto.ValidPublicPoint(s.RecvNon) || !canonicalScalar(s.RecvPartial) {
+			return slateErr("bad receiver point or scalar")
+		}
+	default:
+		return slateErr("unknown stage %d", s.Stage)
+	}
+	return nil
+}
+
+// MarshalBinary returns the fixed binary layout.
+func (s *Slate) MarshalBinary() ([]byte, error) {
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+	b := []byte{SlateVersion, byte(s.Stage)}
+	b = append(b, s.TxID[:]...)
+	b = binary.BigEndian.AppendUint32(b, s.Magic)
+	b = binary.BigEndian.AppendUint64(b, uint64(s.Amount))
+	b = binary.BigEndian.AppendUint64(b, s.Fee)
+	b = binary.BigEndian.AppendUint64(b, s.LockHeight)
+	b = append(b, byte(len(s.Inputs)))
 	for _, in := range s.Inputs {
-		h.Write(in.Commit[:])
+		b = appendInput(b, in)
 	}
-	for _, out := range s.Outputs {
-		h.Write(out.Commit[:])
+	if s.Change != nil {
+		b = append(b, 1)
+		var err error
+		if b, err = appendOutput(b, *s.Change); err != nil {
+			return nil, err
+		}
+	} else {
+		b = append(b, 0)
 	}
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	b = append(b, s.SenderExc[:]...)
+	b = append(b, s.SenderNon[:]...)
+	if s.Stage == StageResponse {
+		b = append(b, s.RecvExc[:]...)
+		b = append(b, s.RecvNon[:]...)
+		b = append(b, s.RecvPartial[:]...)
+		var err error
+		if b, err = appendOutput(b, *s.RecvOutput); err != nil {
+			return nil, err
+		}
+	}
+	b = binary.BigEndian.AppendUint16(b, uint16(len(s.Memo)))
+	return append(b, s.Memo...), nil
 }
 
-func bigUint64(b []byte, v uint64) {
-	for i := 7; i >= 0; i-- {
-		b[i] = byte(v)
-		v >>= 8
+// UnmarshalSlate parses and validates the binary layout.
+func UnmarshalSlate(raw []byte) (*Slate, error) {
+	r := &reader{b: raw}
+	if v := r.u8(); r.err == nil && v != SlateVersion {
+		return nil, slateErr("unsupported version %d", v)
 	}
+	s := &Slate{Stage: SlateStage(r.u8())}
+	copy(s.TxID[:], r.take(16))
+	s.Magic = r.u32()
+	s.Amount = int64(r.u64())
+	s.Fee = r.u64()
+	s.LockHeight = r.u64()
+	n := int(r.u8())
+	if r.err == nil && (n == 0 || n > MaxSlateInputs) {
+		return nil, slateErr("input count")
+	}
+	for i := 0; i < n && r.err == nil; i++ {
+		s.Inputs = append(s.Inputs, r.input())
+	}
+	switch r.u8() {
+	case 0:
+	case 1:
+		o := r.output()
+		s.Change = &o
+	default:
+		if r.err == nil {
+			r.err = slateErr("bad change flag")
+		}
+	}
+	s.SenderExc = r.point()
+	s.SenderNon = r.point()
+	if s.Stage == StageResponse {
+		s.RecvExc = r.point()
+		s.RecvNon = r.point()
+		copy(s.RecvPartial[:], r.take(32))
+		o := r.output()
+		s.RecvOutput = &o
+	}
+	ml := int(r.u16())
+	if r.err == nil && ml > MaxSlateMemo {
+		return nil, slateErr("memo too long")
+	}
+	s.Memo = string(r.take(ml))
+	if r.err != nil {
+		return nil, r.err
+	}
+	if len(r.b) != 0 {
+		return nil, slateErr("trailing bytes")
+	}
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
-// Encode wraps the slate as a Base58-encoded JSON string with a
-// "SLATEPACK1" prefix that nosox-cli looks for when parsing user input.
+// Encode wraps the slate as "SLATEPACK3." + unpadded base64url.
 func (s *Slate) Encode() (string, error) {
-	body, err := json.Marshal(s)
+	raw, err := s.MarshalBinary()
 	if err != nil {
 		return "", err
 	}
-	// Pre-pend a 1-byte stage so a reader can sort slates without
-	// JSON-decoding.
-	withHdr := append([]byte{byte(s.Stage)}, body...)
-	return "SLATEPACK1." + base58Encode(withHdr), nil
-}
-
-// Decode parses a Slatepack string produced by Encode.
-func Decode(s string) (*Slate, error) {
-	if !strings.HasPrefix(s, "SLATEPACK1.") {
-		return nil, errors.New("slatepack: missing prefix")
+	out := SlatePrefix + base64.RawURLEncoding.EncodeToString(raw)
+	if len(out) > MaxSlateEncoded {
+		return "", slateErr("encoded size limit")
 	}
-	body, err := base58Decode(strings.TrimPrefix(s, "SLATEPACK1."))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) < 2 {
-		return nil, errors.New("slatepack: payload too small")
-	}
-	var slate Slate
-	if err := json.Unmarshal(body[1:], &slate); err != nil {
-		return nil, fmt.Errorf("slatepack: json: %w", err)
-	}
-	return &slate, nil
-}
-
-// ---- Base58 (Noso v1 alphabet for cross-tool consistency) -------------
-
-const slateAlphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-
-func base58Encode(b []byte) string {
-	v := new(big.Int).SetBytes(b)
-	zero := new(big.Int)
-	mod := new(big.Int)
-	base := big.NewInt(58)
-	var out []byte
-	for v.Sign() > 0 {
-		v.QuoRem(v, base, mod)
-		out = append(out, slateAlphabet[mod.Int64()])
-	}
-	// Leading zero bytes become "1"s.
-	for _, c := range b {
-		if c != 0 {
-			break
-		}
-		out = append(out, slateAlphabet[0])
-	}
-	_ = zero
-	// Reverse.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return string(out)
-}
-
-func base58Decode(s string) ([]byte, error) {
-	result := new(big.Int)
-	base := big.NewInt(58)
-	for _, c := range s {
-		idx := strings.IndexRune(slateAlphabet, c)
-		if idx < 0 {
-			return nil, fmt.Errorf("slatepack: bad char %q", c)
-		}
-		result.Mul(result, base)
-		result.Add(result, big.NewInt(int64(idx)))
-	}
-	// Recover leading zero bytes from leading '1's.
-	zeros := 0
-	for _, c := range s {
-		if c != rune(slateAlphabet[0]) {
-			break
-		}
-		zeros++
-	}
-	out := append(make([]byte, zeros), result.Bytes()...)
-	// Avoid silently mapping to base64-like padding.
-	_ = base64.StdEncoding
 	return out, nil
+}
+
+// Decode parses a Slatepack string produced by Encode. Surrounding whitespace
+// is ignored; anything else non-canonical is an error. Version 1 slates are
+// rejected explicitly.
+func Decode(text string) (*Slate, error) {
+	text = strings.TrimSpace(text)
+	if len(text) > MaxSlateEncoded {
+		return nil, slateErr("encoded size limit")
+	}
+	if strings.HasPrefix(text, legacySlatePrefix) || strings.HasPrefix(text, legacySlatePrefix2) {
+		return nil, slateErr("slates of format version 1 and 2 are no longer supported")
+	}
+	if !strings.HasPrefix(text, SlatePrefix) {
+		return nil, slateErr("missing %s prefix", SlatePrefix)
+	}
+	body := text[len(SlatePrefix):]
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		// Go's base64 decoder silently skips CR/LF; the text form is canonical.
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+			return nil, slateErr("non-canonical character in slate text")
+		}
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(body)
+	if err != nil {
+		return nil, slateErr("base64: %v", err)
+	}
+	return UnmarshalSlate(raw)
+}
+
+// offerEqual reports whether the sender-owned fields of a and b are identical.
+func offerEqual(a, b *Slate) bool {
+	if a.TxID != b.TxID || a.Magic != b.Magic || a.Amount != b.Amount || a.Fee != b.Fee || a.LockHeight != b.LockHeight ||
+		a.SenderExc != b.SenderExc || a.SenderNon != b.SenderNon || a.Memo != b.Memo || len(a.Inputs) != len(b.Inputs) {
+		return false
+	}
+	for i := range a.Inputs {
+		if a.Inputs[i] != b.Inputs[i] {
+			return false
+		}
+	}
+	if (a.Change == nil) != (b.Change == nil) {
+		return false
+	}
+	if a.Change != nil && (a.Change.Features != b.Change.Features || a.Change.Commit != b.Change.Commit || !bytes.Equal(a.Change.RangeProof, b.Change.RangeProof)) {
+		return false
+	}
+	return true
 }

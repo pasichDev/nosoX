@@ -27,7 +27,7 @@ var MainnetCheckpointsSig []byte
 // canonicalCheckpointHash returns a SHA-256 of the canonical encoding
 // of the supplied checkpoint list. Encoding format:
 //
-//	"NosoX-Checkpoints-v1\n"
+//	"NosoX/checkpoints/v5\0"
 //	for each checkpoint (sorted by Height ascending):
 //	    8-byte big-endian Height
 //	    32-byte raw Hash
@@ -42,7 +42,7 @@ func CanonicalCheckpointHash(list []Checkpoint) [32]byte {
 		}
 	}
 	h := sha256.New()
-	h.Write([]byte("NosoX-Checkpoints-v1\n"))
+	h.Write([]byte("NosoX/checkpoints/v5\x00"))
 	var hb [8]byte
 	for _, cp := range sorted {
 		binary.BigEndian.PutUint64(hb[:], cp.Height)
@@ -61,9 +61,13 @@ func CanonicalCheckpointHash(list []Checkpoint) [32]byte {
 //	                  baked in a key yet — dev mode)
 //	pubkey != nil and sig == nil → returns ErrUnsignedCheckpoints
 //	pubkey != nil and sig is wrong → returns ErrBadCheckpointSig
+//	pubkey != nil and not 32 bytes → returns ErrBadCheckpointSig
 func VerifyCheckpointList(pubkey ed25519.PublicKey, sig []byte, list []Checkpoint) error {
 	if pubkey == nil {
 		return nil
+	}
+	if len(pubkey) != ed25519.PublicKeySize {
+		return ErrBadCheckpointSig // ed25519.Verify panics on a malformed key
 	}
 	if len(sig) == 0 {
 		return ErrUnsignedCheckpoints

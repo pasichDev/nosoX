@@ -1,19 +1,9 @@
 package crypto
 
-// Constant-time Borromean range-proof prover.
-//
-// The original prover in borromean.go uses `math/big` and
-// `elliptic.Curve.ScalarBaseMult` whose timing correlates with the
-// secret bit value and per-bit blinding factor r_i. This file mirrors
-// the construction using decred's `secp256k1.ModNScalar` for scalar
-// arithmetic and `secp256k1.PrivateKey.PubKey()` for the secret
-// fixed-base multiplication, both of which are designed for
-// constant-time execution.
-//
-// Fake-branch math (where the prover chose the scalars themselves)
-// stays variable-time because it leaks nothing about the secret r.
-//
-// Verifier remains in borromean.go — its inputs are entirely public.
+// Scalar-based variant of the project's custom range-proof prover.
+// The historical CT suffix is API compatibility only: PedersenCommit uses
+// variable-time big integers, PrivateKey.PubKey calls ScalarBaseMultNonConst,
+// and bit-dependent control flow remains. No side-channel guarantee is made.
 
 import (
 	"crypto/rand"
@@ -59,9 +49,8 @@ func ensureCTConstants() {
 	})
 }
 
-// ProveRangeBorromeanCT is the constant-time variant of
-// ProveRangeBorromean. Produces wire-identical output (same proof
-// structure) so existing verifiers accept it as-is.
+// ProveRangeBorromeanCT is the scalar-based variant; its name does not imply
+// constant-time execution. It uses the same proof encoding.
 func ProveRangeBorromeanCT(commit [33]byte, blinding []byte, value int64) ([]byte, error) {
 	ensureCTConstants()
 	if value < 0 {
@@ -69,6 +58,14 @@ func ProveRangeBorromeanCT(commit [33]byte, blinding []byte, value int64) ([]byt
 	}
 	if len(blinding) != 32 {
 		return nil, errors.New("rangeproof: blinding must be 32 bytes")
+	}
+
+	want, err := PedersenCommit(value, blinding)
+	if err != nil {
+		return nil, err
+	}
+	if want != commit || !ValidPublicPoint(commit) {
+		return nil, errors.New("rangeproof: commitment does not match opening")
 	}
 
 	// Per-bit blinding factors as ModNScalar.
@@ -124,7 +121,7 @@ func ProveRangeBorromeanCT(commit [33]byte, blinding []byte, value int64) ([]byt
 	return out, nil
 }
 
-// bitOrProveCT is the constant-time variant of bitOrProve. Wire output
+// bitOrProveCT is the scalar-based variant of bitOrProve. Wire output
 // matches bitOrProve so verifiers don't need to change.
 func bitOrProveCT(C [33]byte, r *secp.ModNScalar, bit bool) ([]byte, error) {
 	// Three random scalars: real-branch nonce, fake-branch challenge, fake response.
@@ -139,7 +136,7 @@ func bitOrProveCT(C [33]byte, r *secp.ModNScalar, bit bool) ([]byte, error) {
 		return nil, err
 	}
 
-	// Real branch: T_real = k·G via constant-time PrivateKey.PubKey().
+	// Real branch: T_real = k·G via variable-time PrivateKey.PubKey().
 	kPriv := secp.NewPrivateKey(&k)
 	tRealCompressed := kPriv.PubKey().SerializeCompressed()
 	var TReal [33]byte
@@ -170,9 +167,8 @@ func bitOrProveCT(C [33]byte, r *secp.ModNScalar, bit bool) ([]byte, error) {
 	}
 
 	// T_fake = sFake·G − eFake·targetFake.
-	// Both scalars (sFake, eFake) are sampled by the prover, so the
-	// remaining variable-time arithmetic on them leaks nothing about r
-	// or about the bit value.
+	// These scalars and target selection are prover state. This implementation
+	// does not establish that their variable-time use hides the witness.
 	tFake, err := pointAddVT(
 		scalarTimesG(&sFake),
 		scalarTimesPointNeg(&eFake, targetFake),
@@ -271,8 +267,7 @@ func scalarSetUint64CT(out *secp.ModNScalar, v uint64) {
 	out.SetBytes(&b)
 }
 
-// scalarTimesG returns s·G via PrivateKey.PubKey() (constant-time
-// fixed-base mul).
+// scalarTimesG returns s·G via variable-time PrivateKey.PubKey().
 func scalarTimesG(s *secp.ModNScalar) *secp.PublicKey {
 	// Clone s into a fresh ModNScalar to avoid the constructor's
 	// "we own this pointer" semantics.
@@ -283,7 +278,7 @@ func scalarTimesG(s *secp.ModNScalar) *secp.PublicKey {
 }
 
 // scalarTimesPointNeg returns (−s)·P using variable-time arithmetic
-// (the scalar is public to the prover, so this is safe).
+// (no side-channel security claim).
 func scalarTimesPointNeg(s *secp.ModNScalar, p *secp.PublicKey) *secp.PublicKey {
 	// Negate s into a fresh scalar.
 	var negS secp.ModNScalar
@@ -297,7 +292,7 @@ func scalarTimesPointNeg(s *secp.ModNScalar, p *secp.PublicKey) *secp.PublicKey 
 }
 
 // pointAddVT adds two public keys via variable-time Jacobian add.
-// Safe for fake-branch math.
+// This operation is variable time.
 func pointAddVT(a, b *secp.PublicKey) (*secp.PublicKey, error) {
 	var aj, bj, result secp.JacobianPoint
 	a.AsJacobian(&aj)

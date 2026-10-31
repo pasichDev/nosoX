@@ -7,14 +7,12 @@
 //
 // where G is the standard secp256k1 generator and H is a NUMS
 // ("Nothing-Up-My-Sleeve") point with no known discrete log w.r.t. G.
-// We derive H deterministically by hashing the bytes of G's encoding and
-// using the resulting digest as an X-coord candidate (try-and-increment).
+// H is derived from a fixed domain string using try-and-increment, as below.
+// Independence is an assumption requiring cryptographic review.
 //
-// Range proofs in this implementation are intentionally simple — a
-// 64-bit non-negative amount check via a NUMS-rooted sigma-style proof
-// that is structurally complete but not as compact as Bulletproofs.
-// The interface is shaped so a future drop-in upgrade (bulletproofs,
-// halo, etc.) requires zero changes elsewhere in the code.
+// Range proofs use a custom bit-decomposition construction. Neither this
+// construction nor these variable-time secret operations have received an
+// independent cryptographic review; production security is not established.
 package crypto
 
 import (
@@ -29,13 +27,13 @@ import (
 func Curve() *btcec.KoblitzCurve { return btcec.S256() }
 
 // generatorH is the secondary base point for Pedersen value commits.
-// Derived once at init time from SHA-256("Noso v2 Pedersen H point") using
+// Derived once at init time from SHA-256("NosoX/pedersen-h/v5\0") using
 // try-and-increment over the X coordinate. The resulting Y is fixed at
 // "smaller" parity for determinism.
 var generatorH *btcec.PublicKey
 
 func init() {
-	seed := sha256.Sum256([]byte("Noso v2 Pedersen H point"))
+	seed := sha256.Sum256([]byte("NosoX/pedersen-h/v5\x00"))
 	x := new(big.Int).SetBytes(seed[:])
 	for {
 		x.Mod(x, Curve().Params().P)
@@ -87,6 +85,9 @@ func PedersenCommit(v int64, r []byte) ([33]byte, error) {
 	if len(r) != 32 {
 		return [33]byte{}, errors.New("pedersen: blinding factor must be 32 bytes")
 	}
+	if new(big.Int).SetBytes(r).Cmp(Curve().Params().N) >= 0 {
+		return [33]byte{}, errors.New("pedersen: noncanonical scalar")
+	}
 	curve := Curve()
 
 	// v · H
@@ -106,6 +107,9 @@ func PedersenCommit(v int64, r []byte) ([33]byte, error) {
 // (positive_commits) − (negative_commits) − (fee·H) equals the identity
 // (point at infinity). This is the central conservation check of MW.
 func PedersenSumZero(positive, negative [][33]byte, fee int64) (bool, error) {
+	if fee < 0 {
+		return false, errors.New("pedersen: negative fee")
+	}
 	curve := Curve()
 	accX, accY := big.NewInt(0), big.NewInt(0)
 	add := func(b [33]byte, neg bool) error {
@@ -148,7 +152,7 @@ func PedersenSumZero(positive, negative [][33]byte, fee int64) (bool, error) {
 // big-endian X.
 func compress(x, y *big.Int) [33]byte {
 	var out [33]byte
-	if x == nil || y == nil {
+	if x == nil || y == nil || (x.Sign() == 0 && y.Sign() == 0) {
 		return out // identity → all zeros
 	}
 	if y.Bit(0) == 0 {
@@ -163,24 +167,24 @@ func compress(x, y *big.Int) [33]byte {
 
 // decompress restores (x, y) from the 33-byte compressed encoding.
 func decompress(c [33]byte) (*big.Int, *big.Int, error) {
-	if c[0] == 0 {
-		// Identity sentinel: caller uses (0, 0) for the empty sum.
+	if c == ([33]byte{}) {
 		return big.NewInt(0), big.NewInt(0), nil
 	}
-	if c[0] != 0x02 && c[0] != 0x03 {
+	if c[0] != 2 && c[0] != 3 {
 		return nil, nil, errors.New("pedersen: bad compressed prefix")
 	}
-	x := new(big.Int).SetBytes(c[1:])
-	p := Curve().Params().P
-	xCubed := new(big.Int).Exp(x, big.NewInt(3), p)
-	rhs := new(big.Int).Add(xCubed, Curve().Params().B)
-	rhs.Mod(rhs, p)
-	y := new(big.Int).ModSqrt(rhs, p)
-	if y == nil {
-		return nil, nil, errors.New("pedersen: invalid X (no Y exists)")
+	pub, err := btcec.ParsePubKey(c[:])
+	if err != nil {
+		return nil, nil, err
 	}
-	if (c[0] == 0x02) != (y.Bit(0) == 0) {
-		y.Sub(p, y)
+	return pub.X(), pub.Y(), nil
+}
+
+// ValidPublicPoint accepts only canonical nonidentity compressed curve points.
+func ValidPublicPoint(c [33]byte) bool {
+	if c == ([33]byte{}) {
+		return false
 	}
-	return x, y, nil
+	_, _, err := decompress(c)
+	return err == nil
 }

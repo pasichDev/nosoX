@@ -2,10 +2,8 @@ package chain
 
 import (
 	"testing"
-	"time"
 
-	"github.com/noso-project/noso-go/v2/pow"
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 )
 
 // TestCheckpointEnforcement: a block at a pinned height with the wrong
@@ -79,19 +77,7 @@ func TestCheckpointRefusesCrossingReorg(t *testing.T) {
 // trivial difficulty=1. Used to bootstrap mem-store tests.
 func easyGenesisBlock(t *testing.T) *types.Block {
 	t.Helper()
-	hdr := types.BlockHeader{
-		Version:    types.BlockVersion,
-		Height:     0,
-		Timestamp:  time.Now().Unix() - 600,
-		Difficulty: 1,
-	}
-	for n := uint64(0); n < 64; n++ {
-		hdr.Nonce = n
-		if pow.Verify(&hdr) {
-			break
-		}
-	}
-	return &types.Block{Header: hdr}
+	return mineEasy(types.Hash{}, 0)
 }
 
 func mustHeaderPtr(h types.BlockHeader, ok bool) *types.BlockHeader {

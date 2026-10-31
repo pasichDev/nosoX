@@ -1,22 +1,41 @@
 name: release
 
-# Builds reproducible binaries for the node, CLI/wallet, miner (the node
-# with -mine) and explorer on every pushed semver tag, then attaches them
-# to a GitHub Release. Reproducible flags (-trimpath, -buildvcs=false,
-# stripped buildid) make two independent rebuilds byte-identical — see
-# docs/v2/REPRODUCIBLE.md.
+# Builds binaries for the node (nosoxd, which also mines with -mine) and the
+# command-line client (nosox-cli) on every pushed tag starting with "v", then
+# attaches them to a GitHub Release together with one combined SHA256SUMS file
+# and a build-provenance attestation. The build flags (-trimpath,
+# -buildvcs=false, stripped build ID) are chosen so independent rebuilds
+# should be identical; see docs/reproducible-builds.md.
+#
+# Permissions are split by job. Only the final job can write to the repository,
+# only the attest job can request an OIDC token, and the build jobs run with
+# read access only. Every action is pinned to a full commit SHA.
+#
+# Publishing requires a PUBLIC repository: GitHub artifact attestations are
+# only available for public repositories (or private ones on GitHub Enterprise
+# Cloud), so while this repository is private the attest job, and with it the
+# whole release, fails. Make the repository public BEFORE pushing the first
+# release tag. The "release" environment's required reviewers (repository
+# settings) are also only enforced on public repositories or paid plans: add
+# them, because nothing in this file can.
+#
+# The build job does not use a build or module cache: a tag run may restore
+# caches written by default-branch jobs, and a poisoned cache would end up in a
+# signed release.
 
 on:
   push:
     tags: [ 'v*' ]
-  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -29,17 +48,23 @@ jobs:
           - { goos: windows, goarch: amd64 }
     env:
       CGO_ENABLED: '0'
-      GOFLAGS: '-buildvcs=false'
+      GOFLAGS: '-buildvcs=false -mod=readonly'
       GOOS: ${{ matrix.goos }}
       GOARCH: ${{ matrix.goarch }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: '1.25.x'
-          cache: true
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
 
-      - name: Build binaries (node, cli/wallet)
+      - name: Verify modules
+        # Host toolchain and module cache only; GOOS/GOARCH do not matter here.
+        run: go mod verify
+
+      - name: Build binaries (node, cli)
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME:-dev}"
@@ -49,44 +74,110 @@ jobs:
           LDFLAGS="-s -w -buildid="
           # nosoxd = full node + miner (run with -mine)
           go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/nosoxd$EXT"        ./cmd/nosoxd
-          # nosox-cli = wallet + claim/slatepack/GVT tooling
+          # nosox-cli = wallet (slate exchange) and RPC client
           go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/nosox-cli$EXT"     ./cmd/nosox-cli
-          cp README.md docs/v2/LAUNCH.md "$OUT/" 2>/dev/null || true
+          cp README.md LICENSE docs/running-a-node.md "$OUT/"
 
-      - name: Package + checksums
+      - name: Package
+        # Fixed order, owner and timestamps so the archive bytes depend only on
+        # the file contents.
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME:-dev}"
           NAME="noso-go_${VERSION}_${GOOS}_${GOARCH}"
           cd dist
+          find "$NAME" -exec touch -h -d '2000-01-01 00:00:00 UTC' {} +
           if [ "$GOOS" = "windows" ]; then
-            zip -r "${NAME}.zip" "$NAME"; sha256sum "${NAME}.zip" > "${NAME}.zip.sha256"
+            find "$NAME" | LC_ALL=C sort | zip -X -q "${NAME}.zip" -@
           else
-            tar -czf "${NAME}.tar.gz" "$NAME"; sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+            tar --sort=name --owner=0 --group=0 --numeric-owner \
+                --mtime='2000-01-01 00:00:00 UTC' -cf - "$NAME" | gzip -n -9 > "${NAME}.tar.gz"
           fi
+          rm -rf "$NAME"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: noso-go-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             dist/*.tar.gz
             dist/*.zip
-            dist/*.sha256
+          if-no-files-found: error
+
+  attest:
+    # Writes one combined SHA256SUMS and signs a provenance statement for every
+    # archive. This is the only job that holds id-token and attestations.
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Combined SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          # Exactly six archives are expected; refuse to sign a partial release.
+          n="$(ls -1 *.tar.gz *.zip | wc -l)"
+          if [ "$n" -ne 6 ]; then echo "expected 6 archives, found $n" >&2; ls -l; exit 1; fi
+          ls -1 *.tar.gz *.zip | LC_ALL=C sort | xargs sha256sum -- > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Collect release metadata
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p meta
+          cp dist/SHA256SUMS meta/SHA256SUMS
+          cp "$BUNDLE_PATH" meta/SHA256SUMS.sigstore.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-metadata
+          path: meta/
+          if-no-files-found: error
 
   release:
-    needs: build
-    runs-on: ubuntu-latest
+    needs: [build, attest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     if: startsWith(github.ref, 'refs/tags/')
+    # Add required reviewers to this environment in the repository settings to
+    # gate publication.
+    environment: release
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { path: dist, merge-multiple: true }
+
+      - name: Check what is about to be published
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          ls -l
+
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             dist/*.tar.gz
             dist/*.zip
-            dist/*.sha256
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sigstore.json
           generate_release_notes: true

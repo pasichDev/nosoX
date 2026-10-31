@@ -11,7 +11,7 @@
 //	time   = 1 pass
 //	threads = 1 lane (deterministic)
 //	keyLen = 32 bytes
-//	salt   = "NosoX-v1-PoW-salt-32B-deterministic"
+//	salt   = "NosoX/pow-salt/v5\0"
 //
 // The hash is interpreted as a big-endian 256-bit integer; a block is
 // valid when hash * difficulty <= 2^256 − 1 (standard Bitcoin-style
@@ -21,21 +21,21 @@ package pow
 import (
 	"math/big"
 
-	"github.com/noso-project/noso-go/v2/types"
+	"github.com/pasichDev/noso-go/v2/types"
 	"golang.org/x/crypto/argon2"
 )
 
 // Argon2 parameters.
 const (
-	Argon2Memory   uint32 = 64 * 1024 // KiB
-	Argon2Time     uint32 = 1
-	Argon2Threads  uint8  = 1
-	Argon2KeyLen   uint32 = 32
+	Argon2Memory  uint32 = 64 * 1024 // KiB
+	Argon2Time    uint32 = 1
+	Argon2Threads uint8  = 1
+	Argon2KeyLen  uint32 = 32
 )
 
 // Salt is fixed for determinism. The header carries the actual entropy
 // (prev_hash, merkle roots, nonce).
-var Salt = []byte("NosoX-v1-PoW-salt-32B-deterministic")
+var Salt = []byte("NosoX/pow-salt/v5\x00")
 
 // MaxTarget is 2^256 − 1.
 var MaxTarget = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
@@ -53,7 +53,7 @@ func Hash(h *types.BlockHeader) [32]byte {
 // hash is valid iff (big.Int from hash) <= target.
 func Target(difficulty uint64) *big.Int {
 	if difficulty == 0 {
-		difficulty = 1
+		return new(big.Int)
 	}
 	d := new(big.Int).SetUint64(difficulty)
 	return new(big.Int).Div(MaxTarget, d)
@@ -62,16 +62,10 @@ func Target(difficulty uint64) *big.Int {
 // Verify reports whether the given header's Argon2id digest meets its
 // declared difficulty.
 func Verify(h *types.BlockHeader) bool {
+	if h == nil || h.Difficulty == 0 {
+		return false
+	}
 	digest := Hash(h)
 	hashInt := new(big.Int).SetBytes(digest[:])
 	return hashInt.Cmp(Target(h.Difficulty)) <= 0
-}
-
-// HashFromDigest is exposed so tests can compare directly without going
-// through types.BlockHeader.
-func HashFromBytes(preimage []byte) [32]byte {
-	digest := argon2.IDKey(preimage, Salt, Argon2Time, Argon2Memory, Argon2Threads, Argon2KeyLen)
-	var out [32]byte
-	copy(out[:], digest)
-	return out
 }
