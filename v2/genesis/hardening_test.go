@@ -3,7 +3,7 @@ package genesis
 import (
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 func TestDefaultTimestampPreservesNetworkAndDifficulty(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // This test targets the storage protocol directly. Synthetic outputs exercise

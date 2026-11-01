@@ -21,7 +21,7 @@ package pow
 import (
 	"math/big"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 	"golang.org/x/crypto/argon2"
 )
 

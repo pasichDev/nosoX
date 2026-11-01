@@ -3,7 +3,7 @@ package mempool
 import (
 	"sync"
 
-	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/nosoX/v2/chain"
 )
 
 // Attachment is the link between a chain and a pool created by Attach.

@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // Config controls genesis generation. Sensible defaults are exposed via

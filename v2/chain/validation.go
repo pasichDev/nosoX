@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"math"
 
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
-	"github.com/pasichDev/noso-go/v2/types"
-	"github.com/pasichDev/noso-go/v2/wallet"
+	v2crypto "github.com/pasichDev/nosoX/v2/crypto"
+	"github.com/pasichDev/nosoX/v2/types"
+	"github.com/pasichDev/nosoX/v2/wallet"
 )
 
 func cloneBlock(b *types.Block) *types.Block {

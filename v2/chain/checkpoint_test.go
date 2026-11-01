@@ -3,7 +3,7 @@ package chain
 import (
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // TestCheckpointEnforcement: a block at a pinned height with the wrong

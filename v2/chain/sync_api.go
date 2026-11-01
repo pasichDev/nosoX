@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"sync/atomic"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // This file holds the read-only queries used by the network and RPC layers:

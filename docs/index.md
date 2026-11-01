@@ -38,5 +38,5 @@ balances carry over, genesis is empty and every coin is mined.
 | Report a vulnerability | [Security](security.md) |
 | See what is missing | [Roadmap](roadmap.md) |
 
-Source: [github.com/pasichDev/noso-go](https://github.com/pasichDev/noso-go).
+Source: [github.com/pasichDev/nosoX](https://github.com/pasichDev/nosoX).
 Licensed under MIT.

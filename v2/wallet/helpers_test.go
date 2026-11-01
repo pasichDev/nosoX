@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
-	"github.com/pasichDev/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/nosoX/v2/crypto"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // fakeNode is an in-memory node that enforces the same transaction rules as

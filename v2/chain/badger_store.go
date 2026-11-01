@@ -14,7 +14,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // BadgerDB key layout (single shared keyspace, prefix-byte tagged):

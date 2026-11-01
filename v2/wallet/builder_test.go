@@ -3,8 +3,8 @@ package wallet
 import (
 	"testing"
 
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
-	"github.com/pasichDev/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/nosoX/v2/crypto"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 func TestNewPlainOutputIsOpenableAndProven(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
+	v2crypto "github.com/pasichDev/nosoX/v2/crypto"
 )
 
 // CoinbaseRecord stores a fresh Pedersen blinding scalar tied to a

@@ -12,8 +12,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
-	"github.com/pasichDev/noso-go/v2/chain"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/chain"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // The sync manager makes the node converge on the chain with the most

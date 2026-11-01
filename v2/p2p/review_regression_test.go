@@ -28,9 +28,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/record"
 	"github.com/libp2p/go-msgio"
 
-	"github.com/pasichDev/noso-go/v2/chain"
-	"github.com/pasichDev/noso-go/v2/mempool"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/chain"
+	"github.com/pasichDev/nosoX/v2/mempool"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // ---- helpers -----------------------------------------------------------

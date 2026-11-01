@@ -5,9 +5,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/chain"
-	"github.com/pasichDev/noso-go/v2/mempool"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/chain"
+	"github.com/pasichDev/nosoX/v2/mempool"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 func minerTx(in byte, fee uint64, outputs int) *types.Transaction {

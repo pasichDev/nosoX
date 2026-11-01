@@ -24,14 +24,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/chain"
-	"github.com/pasichDev/noso-go/v2/genesis"
-	"github.com/pasichDev/noso-go/v2/mempool"
-	"github.com/pasichDev/noso-go/v2/miner"
-	"github.com/pasichDev/noso-go/v2/p2p"
-	"github.com/pasichDev/noso-go/v2/rpc"
-	"github.com/pasichDev/noso-go/v2/types"
-	"github.com/pasichDev/noso-go/v2/wallet"
+	"github.com/pasichDev/nosoX/v2/chain"
+	"github.com/pasichDev/nosoX/v2/genesis"
+	"github.com/pasichDev/nosoX/v2/mempool"
+	"github.com/pasichDev/nosoX/v2/miner"
+	"github.com/pasichDev/nosoX/v2/p2p"
+	"github.com/pasichDev/nosoX/v2/rpc"
+	"github.com/pasichDev/nosoX/v2/types"
+	"github.com/pasichDev/nosoX/v2/wallet"
 )
 
 func main() {

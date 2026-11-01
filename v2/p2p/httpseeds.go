@@ -26,8 +26,8 @@ const SeedsRef = "seeds-v1"
 // transport and the private-address filter limit what it can do, and operators
 // who need more should pass -seed instead.
 var HTTPSeedURLs = map[string][]string{
-	"mainnet": {"https://raw.githubusercontent.com/pasichDev/noso-go/" + SeedsRef + "/seeds/mainnet.txt"},
-	"testnet": {"https://raw.githubusercontent.com/pasichDev/noso-go/" + SeedsRef + "/seeds/testnet.txt"},
+	"mainnet": {"https://raw.githubusercontent.com/pasichDev/nosoX/" + SeedsRef + "/seeds/mainnet.txt"},
+	"testnet": {"https://raw.githubusercontent.com/pasichDev/nosoX/" + SeedsRef + "/seeds/testnet.txt"},
 }
 
 // SeedOptions tunes seed resolution.

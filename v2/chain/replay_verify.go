@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // streamingVerifyHistory replays one canonical block at a time into a disposable

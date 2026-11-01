@@ -1,11 +1,11 @@
 # NosoX
 
-[![ci](https://github.com/pasichDev/noso-go/actions/workflows/ci.yml/badge.svg)](https://github.com/pasichDev/noso-go/actions/workflows/ci.yml)
+[![ci](https://github.com/pasichDev/nosoX/actions/workflows/ci.yml/badge.svg)](https://github.com/pasichDev/nosoX/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 NosoX is a Mimblewimble-style chain written in Go. Outputs are Pedersen
 commitments with range proofs, blocks are mined with memory-hard Argon2id, and
-nodes communicate over libp2p. Documentation: <https://pasichdev.github.io/noso-go/>.
+nodes communicate over libp2p. Documentation: <https://pasichdev.github.io/nosoX/>.
 
 NosoX continues the [Noso](https://github.com/nosocoin) project and its node,
 [NosoNode](https://github.com/nosocoin/NosoNode). It recreates the vision its
@@ -54,8 +54,8 @@ the protocol, nonce safety and the variable-time code that remains.
 Requires Go 1.27.3 or newer.
 
 ```bash
-git clone https://github.com/pasichDev/noso-go
-cd noso-go
+git clone https://github.com/pasichDev/nosoX
+cd nosoX
 go build -o bin/nosoxd ./cmd/nosoxd
 go build -o bin/nosox-cli ./cmd/nosox-cli
 

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // ---- production defaults (TestMain lowers them for speed) ------------------

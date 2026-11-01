@@ -19,8 +19,8 @@ import (
 
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
-	"github.com/pasichDev/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/nosoX/v2/crypto"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // Two-party Mimblewimble payment protocol.

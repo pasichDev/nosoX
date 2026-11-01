@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 func TestTrustedCheckpointsEmptySetStarts(t *testing.T) {

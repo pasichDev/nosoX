@@ -20,8 +20,8 @@ import (
 	"crypto/rand"
 	"errors"
 
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
-	"github.com/pasichDev/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/nosoX/v2/crypto"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // BlindingFactor is a 32-byte scalar used as the Pedersen blinding for

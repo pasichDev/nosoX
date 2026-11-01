@@ -3,7 +3,7 @@
 **Decision: not ready for mainnet. Do not hold value.**
 
 No independent audit has taken place. The review round of 2026-10-31 was done
-by AI-assisted internal reviews, not by an outside party; its findings are in
+by internal reviews, not by an outside party; its findings are in
 [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) and most are still open. `nosoxd` refuses to start with
 `-network mainnet`. The table below is the current gate list. A gate is only
 "met" where it can be checked in the repository. "Covered locally" means

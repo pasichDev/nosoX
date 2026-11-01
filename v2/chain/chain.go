@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/pow"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/pow"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // Chain composes a Store with validation rules, difficulty calculation,

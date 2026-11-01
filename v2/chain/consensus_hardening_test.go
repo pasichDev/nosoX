@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/pow"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/pow"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // mineFork builds a block on parent that differs from mineEasy's (timestamp

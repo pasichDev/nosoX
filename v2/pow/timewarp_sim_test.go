@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // simulateChain mines blocks with the real LWMA3 and an exponential solve

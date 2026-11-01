@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/chain"
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
-	"github.com/pasichDev/noso-go/v2/genesis"
-	"github.com/pasichDev/noso-go/v2/mempool"
-	"github.com/pasichDev/noso-go/v2/pow"
-	"github.com/pasichDev/noso-go/v2/types"
-	"github.com/pasichDev/noso-go/v2/wallet"
+	"github.com/pasichDev/nosoX/v2/chain"
+	v2crypto "github.com/pasichDev/nosoX/v2/crypto"
+	"github.com/pasichDev/nosoX/v2/genesis"
+	"github.com/pasichDev/nosoX/v2/mempool"
+	"github.com/pasichDev/nosoX/v2/pow"
+	"github.com/pasichDev/nosoX/v2/types"
+	"github.com/pasichDev/nosoX/v2/wallet"
 )
 
 func call(t *testing.T, h http.Handler, body, token string) (int, jrpcResp) {

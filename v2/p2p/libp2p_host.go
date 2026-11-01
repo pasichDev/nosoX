@@ -42,9 +42,9 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	ma "github.com/multiformats/go-multiaddr"
 
-	"github.com/pasichDev/noso-go/v2/chain"
-	"github.com/pasichDev/noso-go/v2/mempool"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/chain"
+	"github.com/pasichDev/nosoX/v2/mempool"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // Topic names. Namespaced by network magic so testnet and mainnet

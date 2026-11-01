@@ -1,4 +1,4 @@
-module github.com/pasichDev/noso-go
+module github.com/pasichDev/nosoX
 
 go 1.27.3
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // sampleSlates returns a genuine offer and response (real proofs and partials).

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // Policy is the relay policy of a pool. The zero value admits everything and

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/chain"
+	"github.com/pasichDev/nosoX/v2/chain"
 )
 
 func TestAttachLifecycle(t *testing.T) {

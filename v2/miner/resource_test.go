@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/chain"
-	c "github.com/pasichDev/noso-go/v2/crypto"
-	"github.com/pasichDev/noso-go/v2/genesis"
-	"github.com/pasichDev/noso-go/v2/mempool"
-	"github.com/pasichDev/noso-go/v2/types"
-	"github.com/pasichDev/noso-go/v2/wallet"
+	"github.com/pasichDev/nosoX/v2/chain"
+	c "github.com/pasichDev/nosoX/v2/crypto"
+	"github.com/pasichDev/nosoX/v2/genesis"
+	"github.com/pasichDev/nosoX/v2/mempool"
+	"github.com/pasichDev/nosoX/v2/types"
+	"github.com/pasichDev/nosoX/v2/wallet"
 )
 
 func TestCandidateReservesMandatoryV4Outputs(t *testing.T) {

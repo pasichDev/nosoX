@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/chain"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/chain"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // The daemon's parent context may expire without a direct Stop call.

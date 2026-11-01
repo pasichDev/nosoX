@@ -68,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME:-dev}"
-          OUT="dist/noso-go_${VERSION}_${GOOS}_${GOARCH}"
+          OUT="dist/nosox_${VERSION}_${GOOS}_${GOARCH}"
           mkdir -p "$OUT"
           EXT=""; [ "$GOOS" = "windows" ] && EXT=".exe"
           LDFLAGS="-s -w -buildid="
@@ -84,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME:-dev}"
-          NAME="noso-go_${VERSION}_${GOOS}_${GOARCH}"
+          NAME="nosox_${VERSION}_${GOOS}_${GOARCH}"
           cd dist
           find "$NAME" -exec touch -h -d '2000-01-01 00:00:00 UTC' {} +
           if [ "$GOOS" = "windows" ]; then
@@ -97,7 +97,7 @@ jobs:
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: noso-go-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: nosox-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             dist/*.tar.gz
             dist/*.zip

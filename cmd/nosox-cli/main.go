@@ -36,8 +36,8 @@ import (
 	"syscall"
 	"unicode"
 
-	"github.com/pasichDev/noso-go/v2/types"
-	"github.com/pasichDev/noso-go/v2/wallet"
+	"github.com/pasichDev/nosoX/v2/types"
+	"github.com/pasichDev/nosoX/v2/wallet"
 
 	"golang.org/x/term"
 )

@@ -3,7 +3,7 @@ package wallet
 import (
 	"fmt"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // SyncTrustNotice is attached to every report: confirmations are the node's

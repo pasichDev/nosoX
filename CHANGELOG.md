@@ -60,7 +60,7 @@ Breaking. Databases and peers from earlier protocol versions are rejected.
 - Genesis is empty: no outputs, no kernels. Every coin is issued through mined
   coinbase outputs. Genesis can no longer carry allocations, and an incoming
   non-empty genesis is rejected.
-- The module is `github.com/pasichDev/noso-go`.
+- The module is `github.com/pasichDev/nosoX`.
 
 ### Consensus and node hardening (review round 2026-10-31)
 
@@ -162,7 +162,7 @@ Node behaviour:
   CLI cannot send an RPC token. It states the payment limits: at most 4 inputs,
   no seed-based recovery, unauthenticated slates, no payment proofs.
 - `audit/SECURITY_FINDINGS.md` and `audit/RELEASE_READINESS.md` record the
-  AI-assisted internal review round of 2026-10-31. These are not an
+  internal review round of 2026-10-31. These are not an
   independent audit. Almost all findings are listed as open until a fix is
   verified in the tree.
 - Dependencies upgraded (x/crypto 0.58, x/net 0.62, x/text, x/sys, x/term,

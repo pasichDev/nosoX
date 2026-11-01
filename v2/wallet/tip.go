@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // The tip a node reports is the node's word. It drives which records count as

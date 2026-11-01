@@ -38,9 +38,9 @@ list, because the list comes from the same place as the files. Use the
 attestation for that:
 
 ```bash
-gh attestation verify noso-go_<tag>_linux_amd64.tar.gz \
-  --repo pasichDev/noso-go \
-  --signer-workflow pasichDev/noso-go/.github/workflows/release.yml \
+gh attestation verify nosox_<tag>_linux_amd64.tar.gz \
+  --repo pasichDev/nosoX \
+  --signer-workflow pasichDev/nosoX/.github/workflows/release.yml \
   --source-ref refs/tags/<tag>
 ```
 
@@ -56,8 +56,8 @@ workflow does not do that.
 ## Rebuild and compare
 
 ```bash
-git clone https://github.com/pasichDev/noso-go
-cd noso-go
+git clone https://github.com/pasichDev/nosoX
+cd nosoX
 git checkout <tag>
 scripts/build-release.sh <tag>
 diff release/<tag>/SHA256SUMS /path/to/downloaded/SHA256SUMS

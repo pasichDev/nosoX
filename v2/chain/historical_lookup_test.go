@@ -3,7 +3,7 @@ package chain
 import (
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // A transient persistent-store read error must not make an already-seen

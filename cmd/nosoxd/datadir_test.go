@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/wallet"
+	"github.com/pasichDev/nosoX/v2/wallet"
 )
 
 func TestPrepareDataDirCreatesPrivateTree(t *testing.T) {

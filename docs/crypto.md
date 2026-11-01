@@ -88,6 +88,6 @@ Ed25519 key does not control any output.
 
 `v2/crypto/reference_test.go` checks a Pedersen commitment, the generator `H`
 and a Schnorr signature against constants computed by
-[`audit/reference_vectors.py`](https://github.com/pasichDev/noso-go/blob/main/audit/reference_vectors.py),
+[`audit/reference_vectors.py`](https://github.com/pasichDev/nosoX/blob/main/audit/reference_vectors.py),
 which uses plain affine integer arithmetic. These are consistency checks, not
 proofs of security.

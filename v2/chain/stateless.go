@@ -4,8 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pasichDev/noso-go/v2/pow"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/pow"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // Proof-of-work and signature/range-proof checks are pure functions of the

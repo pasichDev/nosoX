@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/pow"
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/pow"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // mineAt builds and mines a block at the requested difficulty. Caller

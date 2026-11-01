@@ -5,7 +5,7 @@ import (
 	"encoding/gob"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // FuzzBlockDecode feeds arbitrary bytes to the bounded JSON block decoder. A

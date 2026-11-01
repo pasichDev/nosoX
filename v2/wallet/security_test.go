@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	v2crypto "github.com/pasichDev/noso-go/v2/crypto"
-	"github.com/pasichDev/noso-go/v2/types"
+	v2crypto "github.com/pasichDev/nosoX/v2/crypto"
+	"github.com/pasichDev/nosoX/v2/types"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 

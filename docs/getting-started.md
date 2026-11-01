@@ -6,8 +6,8 @@ newer (the version in `go.mod`).
 ## Build
 
 ```bash
-git clone https://github.com/pasichDev/noso-go
-cd noso-go
+git clone https://github.com/pasichDev/nosoX
+cd nosoX
 go build -o bin/nosoxd ./cmd/nosoxd
 go build -o bin/nosox-cli ./cmd/nosox-cli
 ```

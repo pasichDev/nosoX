@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // UTXOInfo is a node's answer about one commitment.

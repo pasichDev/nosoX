@@ -1,8 +1,8 @@
 site_name: NosoX
 site_description: Documentation for the NosoX node, wallet and protocol
-site_url: https://pasichdev.github.io/noso-go/
-repo_url: https://github.com/pasichDev/noso-go
-repo_name: pasichDev/noso-go
+site_url: https://pasichdev.github.io/nosoX/
+repo_url: https://github.com/pasichDev/nosoX
+repo_name: pasichDev/nosoX
 edit_uri: edit/main/docs/
 docs_dir: docs
 strict: true

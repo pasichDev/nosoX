@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 func TestRPCNodeSendsBearerAndNeverFollowsRedirects(t *testing.T) {

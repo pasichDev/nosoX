@@ -3,7 +3,7 @@
 This is a summary of the problems found during internal hardening of this
 codebase, and how each stands today. It is self-contained. It comes from the
 maintainers' own review and is not an independent audit. The review round of
-2026-10-31 (below) was done by AI-assisted internal review of the working
+2026-10-31 (below) was done by internal review of the working
 tree; it is not an independent audit either, and nobody outside the project has
 checked its conclusions.
 
@@ -215,7 +215,7 @@ mined. Nothing carries over.
 
 ## Internal review round, 2026-10-31
 
-Four AI-assisted internal reviews of the working tree on branch
+Four internal reviews of the working tree on branch
 `security/consensus-hardening`: consensus (`v2/types`, `v2/chain`,
 `v2/genesis`, `v2/pow`), networking (`v2/p2p`, `v2/miner`, `v2/mempool`,
 `cmd/nosoxd`), cryptography and wallet (`v2/crypto`, `v2/wallet`,

@@ -3,7 +3,7 @@ package chain
 import (
 	"encoding/binary"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 // Store is the persistence backend the Chain delegates to. Two

@@ -6,7 +6,7 @@ proof of security. Cryptographic soundness is a separate, open question (see
 [RELEASE_READINESS.md](RELEASE_READINESS.md)).
 
 Rules and encodings are specified in the
-[protocol documentation](https://github.com/pasichDev/noso-go/blob/main/docs/protocol.md).
+[protocol documentation](https://github.com/pasichDev/nosoX/blob/main/docs/protocol.md).
 
 ## Invariants
 
@@ -115,6 +115,6 @@ against mutants.
   depends on the operating system and storage hardware.
 - **Capacity.** Atomic failure tests do not prove that every legal transition
   can be applied under all memory and disk conditions. Startup replay is linear
-  in history in time and scratch disk. See [limits](https://github.com/pasichDev/noso-go/blob/main/docs/limits.md).
+  in history in time and scratch disk. See [limits](https://github.com/pasichDev/nosoX/blob/main/docs/limits.md).
 - **Network.** Decoder bounds do not establish resistance to Sybil or eclipse
   attacks or a bound on total resource use by many peers.

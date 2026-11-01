@@ -3,7 +3,7 @@ package mempool
 import (
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 func mkTx(fee uint64) *types.Transaction {

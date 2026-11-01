@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/pasichDev/noso-go/v2/types"
+	"github.com/pasichDev/nosoX/v2/types"
 )
 
 func TestNosoXHashIsDeterministic(t *testing.T) {
