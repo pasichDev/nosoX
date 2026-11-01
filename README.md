@@ -7,8 +7,11 @@ NosoX is a Mimblewimble-style chain written in Go. Outputs are Pedersen
 commitments with range proofs, blocks are mined with memory-hard Argon2id, and
 nodes communicate over libp2p. Documentation: <https://pasichdev.github.io/noso-go/>.
 
-NosoX started as a rewrite of the Noso protocol; it is a new chain, no balances
-carry over. Genesis is empty and every coin is mined.
+NosoX continues the [Noso](https://github.com/nosocoin) project and its node,
+[NosoNode](https://github.com/nosocoin/NosoNode). It recreates the vision its
+author, [pasichDev](https://github.com/pasichDev), had while working as a
+developer on Noso. It is a new chain and no balances carry over. Genesis is
+empty and every coin is mined.
 
 ## Status
 
